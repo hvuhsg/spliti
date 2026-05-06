@@ -1,0 +1,21 @@
+/bin/
+*.test
+*.out
+*.exe
+*.dll
+*.so
+*.dylib
+.DS_Store
+.idea/
+.vscode/
+
+# Compiled binaries left in the repo root by `go build`.
+/stick-fight
+/stick-fight-ai
+/snake
+/snake-net
+/pong
+/tetris
+/breakout
+/invaders
+/pacman
