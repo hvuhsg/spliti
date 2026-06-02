@@ -5,8 +5,10 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/sprite"
 	"github.com/hvuhsg/spliti/plugin/terminal"
 	"github.com/hvuhsg/spliti/plugin/tui"
+	"github.com/hvuhsg/spliti/viewport"
 	"github.com/hvuhsg/spliti/schedule"
 	"github.com/mlange-42/arche/generic"
 )
@@ -88,6 +90,112 @@ func TestRender_HigherZWinsAcrossLayered(t *testing.T) {
 
 	if got := readCell(s, 4, 2); got != 'H' {
 		t.Fatalf("(4,2)=%q, want 'H' (highest Z should win)", got)
+	}
+}
+
+func TestRender_Viewport_ClipsAndOffsets(t *testing.T) {
+	a, s := withSimScreen(t, 20, 8)
+	// Viewport occupies the right-half rectangle (10..20 x 2..7).
+	app.InsertResource(a, &viewport.Viewport{X: 10, Y: 2, W: 10, H: 5, Active: true})
+	a.AddSystems(schedule.Startup, func(c *app.Ctx) {
+		m := generic.NewMap2[tui.Position, tui.Glyph](c.World())
+		// World coords (3,1) should land at screen (13,3).
+		m.NewWith(&tui.Position{X: 3, Y: 1}, &tui.Glyph{Char: 'X'})
+		// World coords (15,2) is outside the viewport's [0,10) world width — must NOT render.
+		m.NewWith(&tui.Position{X: 15, Y: 2}, &tui.Glyph{Char: 'Y'})
+	})
+	a.SetMaxFrames(1).Run()
+	if got := readCell(s, 13, 3); got != 'X' {
+		t.Fatalf("(13,3) screen = %q, want 'X'", got)
+	}
+	// Outside the viewport: cell (5,3) is in screen-coords land but lies
+	// in the editor's chrome area — the renderer should NOT have cleared
+	// or written there. The simulation screen starts at zero values
+	// (' '), so any value other than ' ' indicates leakage.
+	if got := readCell(s, 5, 3); got != ' ' && got != 0 {
+		t.Fatalf("chrome area (5,3) was overwritten by renderer: %q", got)
+	}
+	// Inside the viewport but outside any entity: should have been cleared
+	// to a space.
+	if got := readCell(s, 11, 3); got != ' ' {
+		t.Fatalf("viewport interior (11,3) = %q, want ' '", got)
+	}
+}
+
+func TestRender_Sprite_DrawsCellsAtPosition(t *testing.T) {
+	a, s := withSimScreen(t, 12, 4)
+	reg := sprite.NewRegistry()
+	reg.Set("dot3", &sprite.SpriteAsset{
+		W: 3, H: 1,
+		Cells: []sprite.Cell{
+			{Char: 'a'},
+			{Char: 'b'},
+			{Char: 'c'},
+		},
+	})
+	app.InsertResource(a, reg)
+	a.AddSystems(schedule.Startup, func(c *app.Ctx) {
+		m := generic.NewMap2[tui.Position, sprite.Sprite](c.World())
+		m.NewWith(&tui.Position{X: 2, Y: 1}, &sprite.Sprite{Ref: "dot3"})
+	})
+	a.SetMaxFrames(1).Run()
+	for i, want := range []rune{'a', 'b', 'c'} {
+		if got := readCell(s, 2+i, 1); got != want {
+			t.Fatalf("(%d,1) = %q, want %q", 2+i, got, want)
+		}
+	}
+}
+
+func TestRender_Sprite_LayerSortsAgainstGlyph(t *testing.T) {
+	a, s := withSimScreen(t, 10, 4)
+	reg := sprite.NewRegistry()
+	reg.Set("solid", &sprite.SpriteAsset{
+		W: 1, H: 1,
+		Cells: []sprite.Cell{{Char: 'S'}},
+	})
+	app.InsertResource(a, reg)
+	a.AddSystems(schedule.Startup, func(c *app.Ctx) {
+		// Layered glyph at z=5.
+		gm := generic.NewMap3[tui.Position, tui.Glyph, tui.Layer](c.World())
+		gm.NewWith(&tui.Position{X: 4, Y: 2}, &tui.Glyph{Char: 'G'}, &tui.Layer{Z: 5})
+		// Layered sprite at z=10 at the same cell — sprite should win.
+		sm := generic.NewMap3[tui.Position, sprite.Sprite, tui.Layer](c.World())
+		sm.NewWith(&tui.Position{X: 4, Y: 2}, &sprite.Sprite{Ref: "solid"}, &tui.Layer{Z: 10})
+	})
+	a.SetMaxFrames(1).Run()
+	if got := readCell(s, 4, 2); got != 'S' {
+		t.Fatalf("(4,2) = %q, want 'S' (higher-Z sprite must overdraw glyph)", got)
+	}
+}
+
+func TestRender_Sprite_EmptyCellsTransparent(t *testing.T) {
+	a, s := withSimScreen(t, 10, 4)
+	reg := sprite.NewRegistry()
+	reg.Set("dotted", &sprite.SpriteAsset{
+		W: 3, H: 1,
+		Cells: []sprite.Cell{
+			{Char: 'a'},
+			{Empty: true},
+			{Char: 'c'},
+		},
+	})
+	app.InsertResource(a, reg)
+	a.AddSystems(schedule.Startup, func(c *app.Ctx) {
+		// Plain glyph in the gap that the sprite leaves transparent.
+		gm := generic.NewMap2[tui.Position, tui.Glyph](c.World())
+		gm.NewWith(&tui.Position{X: 1, Y: 1}, &tui.Glyph{Char: 'B'})
+		sm := generic.NewMap2[tui.Position, sprite.Sprite](c.World())
+		sm.NewWith(&tui.Position{X: 0, Y: 1}, &sprite.Sprite{Ref: "dotted"})
+	})
+	a.SetMaxFrames(1).Run()
+	if got := readCell(s, 0, 1); got != 'a' {
+		t.Fatalf("(0,1) = %q, want 'a'", got)
+	}
+	if got := readCell(s, 1, 1); got != 'B' {
+		t.Fatalf("(1,1) = %q, want 'B' (transparent sprite cell must reveal glyph below)", got)
+	}
+	if got := readCell(s, 2, 1); got != 'c' {
+		t.Fatalf("(2,1) = %q, want 'c'", got)
 	}
 }
 

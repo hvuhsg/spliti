@@ -1,0 +1,30 @@
+schema = 1
+name   = "main"
+
+[[entity]]
+name = "left_paddle"
+
+[entity.position]
+x = 2
+y = 5
+
+[entity.sprite]
+ref = "paddle"
+
+[entity.tag]
+name = "paddle_left"
+
+
+[[entity]]
+name = "ball"
+
+[entity.position]
+x = 10
+y = 12
+
+[entity.velocity]
+dx = 1
+dy = 1
+
+[entity.sprite]
+ref = "ball"

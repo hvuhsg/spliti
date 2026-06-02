@@ -1,0 +1,59 @@
+schema = 1
+name   = "main"
+
+[[entity]]
+name = "left_paddle"
+
+[entity.position]
+x = 4
+y = 6
+
+[entity.sprite]
+ref = "paddle"
+
+[entity.bounds]
+w = 1
+h = 4
+
+[entity.tag]
+name = "paddle_left"
+
+
+[[entity]]
+name = "right_paddle"
+
+[entity.position]
+x = 50
+y = 6
+
+[entity.sprite]
+ref = "paddle"
+
+[entity.bounds]
+w = 1
+h = 4
+
+[entity.tag]
+name = "paddle_right"
+
+
+[[entity]]
+name = "ball"
+
+[entity.position]
+x = 28
+y = 8
+
+[entity.sprite]
+ref = "ball"
+
+[entity.velocity]
+dx = 1
+dy = 1
+
+[entity.bounds]
+w = 1
+h = 1
+
+[entity.tag]
+name = "ball"
