@@ -120,7 +120,11 @@ func buildPipeline(g *GPU, format wgpu.TextureFormat) {
 			FrontFace: wgpu.FrontFaceCCW,
 			CullMode:  wgpu.CullModeNone,
 		},
-		Multisample: wgpu.MultisampleState{Count: 1, Mask: 0xFFFFFFFF},
+		// MSAA anti-aliases sprite-quad geometry edges. Sprite shapes defined by
+		// texture alpha (the cutout case) are instead smoothed by the linear
+		// sampler below plus anti-aliased source textures — not by alpha-to-
+		// coverage, which conflicts with the alpha blending in Fragment.
+		Multisample: wgpu.MultisampleState{Count: g.samples, Mask: 0xFFFFFFFF},
 		Fragment: &wgpu.FragmentState{
 			Module:     shader,
 			EntryPoint: "fs_main",
@@ -146,14 +150,24 @@ func buildPipeline(g *GPU, format wgpu.TextureFormat) {
 		panic("webgpu: render pipeline: " + err.Error())
 	}
 
+	// Default to Nearest for crisp pixel art. When Smooth is set, switch to
+	// Linear so textured-sprite edges — whose shape lives in the texture's alpha
+	// — are smoothed instead of stair-stepped. Independent of Samples (MSAA): the
+	// two address different edges (texture alpha vs. quad geometry).
+	magFilter, minFilter := wgpu.FilterModeNearest, wgpu.FilterModeNearest
+	mipFilter := wgpu.MipmapFilterModeNearest
+	if g.smooth {
+		magFilter, minFilter = wgpu.FilterModeLinear, wgpu.FilterModeLinear
+		mipFilter = wgpu.MipmapFilterModeLinear
+	}
 	g.sampler, err = g.device.CreateSampler(&wgpu.SamplerDescriptor{
 		Label:         "spliti.webgpu.sampler",
 		AddressModeU:  wgpu.AddressModeClampToEdge,
 		AddressModeV:  wgpu.AddressModeClampToEdge,
 		AddressModeW:  wgpu.AddressModeClampToEdge,
-		MagFilter:     wgpu.FilterModeNearest, // crisp pixel art
-		MinFilter:     wgpu.FilterModeNearest,
-		MipmapFilter:  wgpu.MipmapFilterModeNearest,
+		MagFilter:     magFilter,
+		MinFilter:     minFilter,
+		MipmapFilter:  mipFilter,
 		LodMaxClamp:   1,
 		MaxAnisotropy: 1,
 	})
@@ -208,6 +222,53 @@ func newInstanceBuffer(g *GPU, capacity int) *wgpu.Buffer {
 		panic("webgpu: instance buffer: " + err.Error())
 	}
 	return buf
+}
+
+// normalizeSamples clamps a requested sample count to a portable MSAA value.
+// WebGPU only guarantees support for 1 and 4 samples, so anything above 1 is
+// mapped to 4 and anything else to 1 (MSAA off).
+func normalizeSamples(n int) uint32 {
+	if n <= 1 {
+		return 1
+	}
+	return 4
+}
+
+// ensureMSAATarget (re)creates the multisampled color texture the render pass
+// renders into before resolving to the swapchain. It releases any previous one,
+// sizing the new texture to the current surface config. No-op when MSAA is off
+// (g.samples <= 1), leaving msaaView nil so the render pass draws straight to
+// the swapchain.
+func ensureMSAATarget(g *GPU) {
+	if g.msaaView != nil {
+		g.msaaView.Release()
+		g.msaaView = nil
+	}
+	if g.msaaTex != nil {
+		g.msaaTex.Release()
+		g.msaaTex = nil
+	}
+	if g.samples <= 1 {
+		return
+	}
+	tex, err := g.device.CreateTexture(&wgpu.TextureDescriptor{
+		Label:         "spliti.webgpu.msaa",
+		Usage:         wgpu.TextureUsageRenderAttachment,
+		Dimension:     wgpu.TextureDimension2D,
+		Size:          wgpu.Extent3D{Width: g.config.Width, Height: g.config.Height, DepthOrArrayLayers: 1},
+		Format:        g.config.Format,
+		MipLevelCount: 1,
+		SampleCount:   g.samples,
+	})
+	if err != nil {
+		panic("webgpu: msaa texture: " + err.Error())
+	}
+	view, err := tex.CreateView(nil)
+	if err != nil {
+		tex.Release()
+		panic("webgpu: msaa view: " + err.Error())
+	}
+	g.msaaTex, g.msaaView = tex, view
 }
 
 // ensureInstanceCap grows the instance buffer to hold at least n instances,

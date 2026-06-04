@@ -84,6 +84,21 @@ func TestPackInstancesBreaksBatchOnRefChange(t *testing.T) {
 	}
 }
 
+func TestNormalizeSamplesClampsToPortableCounts(t *testing.T) {
+	cases := []struct {
+		in   int
+		want uint32
+	}{
+		{-1, 1}, {0, 1}, {1, 1}, // MSAA off
+		{2, 4}, {4, 4}, {8, 4}, {16, 4}, // anything >1 -> 4
+	}
+	for _, c := range cases {
+		if got := normalizeSamples(c.in); got != c.want {
+			t.Fatalf("normalizeSamples(%d) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
 func TestColorOrDefault(t *testing.T) {
 	if got := (Color{}).orDefault(); got != opaqueWhite {
 		t.Fatalf("zero Color orDefault = %+v, want opaque white", got)
