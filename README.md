@@ -113,6 +113,7 @@ Pac-Man controls: arrows or WASD to steer through the maze. Power pellets turn g
 | [Events & States](docs/events-and-states.md) | Event lifetime, `ClearEvents`, state machines, `OnEnter`/`OnExit`.          |
 | [Plugins](docs/plugins.md)                   | Writing your own plugin, the built-in plugin set, lifecycle hooks.          |
 | [TUI & Input](docs/tui-and-input.md)         | Render/present split, overlays, the no-flicker invariant, raw input events. |
+| [GPU rendering](docs/gpu.md)                  | The `webgpu` backend: textured sprites, textures, camera, GLFW input, cgo.  |
 | [Network](docs/network.md)                   | Lockstep multiplayer, determinism contract, stall policies, `PlayerKey`.    |
 
 ## Project layout
