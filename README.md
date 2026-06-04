@@ -46,10 +46,11 @@ Working today:
 - Resources, events with frame-buffered lifetime, typed state machines.
 - Time plugin with fixed-timestep accumulator and frame pacing.
 - tcell-backed terminal, input, and rendering plugins. Single-flush-per-frame so HUD overlays don't flicker.
+- **GPU rendering** off the terminal: drop in `webgpu.Plugin` to open a window and draw textured-sprite entities through the GPU (WebGPU via [cogentcore/webgpu](https://github.com/cogentcore/webgpu) + GLFW). The engine keeps owning the loop — it's a render/present/input plugin against the same seam as `tui`, with its own tcell-free `Transform`/`Color`/`Sprite` components. Requires `CGO_ENABLED=1`. See `examples/gpu-demo`.
 - TCP **lockstep multiplayer** for 2..N players. Drop in `network.Plugin`, read `PlayerKey` events, stay deterministic. See [docs/network.md](docs/network.md).
 - Examples: single-player Snake (`examples/snake`), networked two-player Snake (`examples/snake-net`), a networked stick-figure fighter (`examples/stick-fight`), a single-player stick-figure fighter against an AI (`examples/stick-fight-ai`), and five arcade classics — Pong (`examples/pong`), Tetris (`examples/tetris`), Breakout (`examples/breakout`), Space Invaders (`examples/invaders`), and Pac-Man (`examples/pacman`).
 
-Out of scope today: parallel scheduling, GPU rendering, NAT traversal, rollback netcode, hot reload. None of these are precluded — the engine is small enough to grow into them.
+Out of scope today: parallel scheduling, NAT traversal, rollback netcode, hot reload. None of these are precluded — the engine is small enough to grow into them.
 
 ## Install
 
@@ -82,6 +83,9 @@ go run github.com/hvuhsg/spliti/examples/tetris
 go run github.com/hvuhsg/spliti/examples/breakout
 go run github.com/hvuhsg/spliti/examples/invaders
 go run github.com/hvuhsg/spliti/examples/pacman
+
+# GPU window demo (textured sprites via WebGPU; needs cgo + a C toolchain)
+CGO_ENABLED=1 go run github.com/hvuhsg/spliti/examples/gpu-demo
 ```
 
 Snake controls: arrow keys or WASD, `q` to quit, `r` to restart on game over.
@@ -122,6 +126,7 @@ spliti/
 │   ├── terminal/              # tcell screen as a shared resource
 │   ├── input/                 # raw key/resize/mouse events
 │   ├── tui/                   # Position+Glyph render + overlay system
+│   ├── webgpu/                # GPU window: textured-sprite render via WebGPU + GLFW (cgo)
 │   ├── network/               # lockstep multiplayer over TCP
 │   └── defaultplugins/        # bundle of time + terminal + input + tui
 ├── examples/
@@ -133,7 +138,8 @@ spliti/
 │   ├── tetris/                # falling tetrominoes
 │   ├── breakout/              # paddle, ball, brick wall
 │   ├── invaders/              # marching aliens, four shields, one cannon
-│   └── pacman/                # maze, dots, four ghosts, power pellets
+│   ├── pacman/                # maze, dots, four ghosts, power pellets
+│   └── gpu-demo/              # bouncing textured quads in a GPU window (webgpu.Plugin)
 └── docs/
 ```
 
