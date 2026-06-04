@@ -51,8 +51,17 @@ const (
 	ballSz = 5.0
 )
 
-// Velocity moves a Transform each Update tick, in world units per second.
-type Velocity struct{ X, Y float32 }
+// Body is a ball's physics state. Velocity is in world units per second; Prev
+// and Cur are the ball's center-of-motion (top-left) position at the start and
+// end of the most recent fixed step. The render pass interpolates between them
+// (see interpolate) so motion stays smooth when the display refresh and the
+// 64 Hz fixed step don't divide evenly. Transform.X/Y is the interpolated
+// draw position and is written only by interpolate, never by the sim.
+type Body struct {
+	VX, VY       float32
+	PrevX, PrevY float32
+	CurX, CurY   float32
+}
 
 func main() {
 	flag.Parse()
@@ -101,6 +110,10 @@ func main() {
 
 	a.AddSystems(schedule.Startup, setup)
 	a.AddSystems(schedule.FixedUpdate, move) // physics on the fixed step, like Unity's FixedUpdate
+	// interpolate runs every rendered frame, before the sprite pass, writing the
+	// lerp between the last two fixed states into each Transform — the render half
+	// of the fixed-timestep pattern.
+	webgpu.AddPreRender(a, interpolate)
 	a.AddSystems(schedule.Update, quitOnEscape)
 	a.AddSystems(schedule.Last, frameStats())
 
@@ -170,53 +183,76 @@ func setup(c *app.Ctx) {
 	const n = 6
 	for i := 0; i < n; i++ {
 		i := i
-		app.Spawn4[webgpu.Transform, webgpu.Sprite, webgpu.Color, Velocity](
+		app.Spawn4[webgpu.Transform, webgpu.Sprite, webgpu.Color, Body](
 			c.Commands(),
-			func(t *webgpu.Transform, s *webgpu.Sprite, col *webgpu.Color, v *Velocity) {
+			func(t *webgpu.Transform, s *webgpu.Sprite, col *webgpu.Color, b *Body) {
 				// Deterministic spread across the world rect.
-				t.X = float32(8 + (i*11)%int(worldW-ballSz))
-				t.Y = float32(6 + (i*7)%int(worldH-ballSz))
+				x := float32(8 + (i*11)%int(worldW-ballSz))
+				y := float32(6 + (i*7)%int(worldH-ballSz))
+				t.X, t.Y = x, y
 				t.W, t.H = ballSz, ballSz
 				s.Ref = "ball"
 				*col = palette[i%len(palette)]
-				v.X = float32(14 + 3*i)
-				v.Y = float32(11 + 4*((i%3)+1))
+				b.PrevX, b.PrevY = x, y
+				b.CurX, b.CurY = x, y
+				b.VX = float32(14 + 3*i)
+				b.VY = float32(11 + 4*((i%3)+1))
 				if i%2 == 0 {
-					v.X = -v.X
+					b.VX = -b.VX
 				}
 				if i%3 == 0 {
-					v.Y = -v.Y
+					b.VY = -b.VY
 				}
 			},
 		)
 	}
 }
 
-// move advances each ball by its velocity, bouncing off the world edges. It runs
-// in FixedUpdate, so it steps by the constant fixed timestep (not the variable
-// render delta) — motion stays uniform regardless of frame-rate jitter.
+// move advances each ball's fixed-step position by its velocity, bouncing off
+// the world edges. It runs in FixedUpdate, so it steps by the constant fixed
+// timestep (not the variable render delta) — motion stays uniform regardless of
+// frame-rate jitter. It writes only the Body's Cur/Prev, never the Transform;
+// interpolate turns those into the rendered position.
 func move(c *app.Ctx) {
 	t := app.GetResource[splititime.Time](c)
 	dt := float32(t.FixedDelta().Seconds())
-	app.Query2[webgpu.Transform, Velocity](c, func(_ ecs.Entity, tr *webgpu.Transform, v *Velocity) {
-		tr.X += v.X * dt
-		tr.Y += v.Y * dt
-		if tr.X < 0 {
-			tr.X = 0
-			v.X = -v.X
+	app.Query1[Body](c, func(_ ecs.Entity, b *Body) {
+		b.PrevX, b.PrevY = b.CurX, b.CurY
+		b.CurX += b.VX * dt
+		b.CurY += b.VY * dt
+		if b.CurX < 0 {
+			b.CurX = 0
+			b.VX = -b.VX
 		}
-		if tr.X+tr.W > worldW {
-			tr.X = worldW - tr.W
-			v.X = -v.X
+		if b.CurX+ballSz > worldW {
+			b.CurX = worldW - ballSz
+			b.VX = -b.VX
 		}
-		if tr.Y < 0 {
-			tr.Y = 0
-			v.Y = -v.Y
+		if b.CurY < 0 {
+			b.CurY = 0
+			b.VY = -b.VY
 		}
-		if tr.Y+tr.H > worldH {
-			tr.Y = worldH - tr.H
-			v.Y = -v.Y
+		if b.CurY+ballSz > worldH {
+			b.CurY = worldH - ballSz
+			b.VY = -b.VY
 		}
+	})
+}
+
+// interpolate writes lerp(Prev, Cur, alpha) into each Transform every rendered
+// frame, where alpha is the fraction of a fixed step elapsed since the last
+// FixedUpdate. This is the render half of the fixed-timestep pattern: without it,
+// a 64 Hz sim shows visible stepping on a faster display; with it, the balls
+// glide between fixed states.
+func interpolate(c *app.Ctx) {
+	t := app.GetResource[splititime.Time](c)
+	if t == nil {
+		return
+	}
+	alpha := float32(t.Alpha())
+	app.Query2[webgpu.Transform, Body](c, func(_ ecs.Entity, tr *webgpu.Transform, b *Body) {
+		tr.X = b.PrevX + (b.CurX-b.PrevX)*alpha
+		tr.Y = b.PrevY + (b.CurY-b.PrevY)*alpha
 	})
 }
 

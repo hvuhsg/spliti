@@ -59,10 +59,14 @@ type Plugin struct {
 	Samples int
 
 	// Smooth switches texture sampling from Nearest (crisp pixel art, the
-	// default) to Linear. This is what anti-aliases ordinary sprite edges — whose
-	// shape lives in the texture's alpha — and needs no MSAA target, so it's far
-	// cheaper than Samples for that purpose. Independent of Samples: the two
-	// smooth different edges (texture alpha vs. quad geometry) and compose freely.
+	// default) to Linear, and additionally to trilinear + anisotropic filtering
+	// over the texture's mip chain. This anti-aliases ordinary sprite edges —
+	// whose shape lives in the texture's alpha — both when magnified (linear) and
+	// minified (mip levels stop scaled-down sprites from shimmering). It needs no
+	// MSAA target, so it's far cheaper than Samples for that purpose. Independent
+	// of Samples: the two smooth different edges (texture alpha vs. quad geometry)
+	// and compose freely. (Mip levels are generated for every texture regardless;
+	// Smooth only controls whether sampling across them is linear or nearest.)
 	Smooth bool
 }
 
@@ -79,6 +83,9 @@ type GPU struct {
 
 	pipeline *wgpu.RenderPipeline
 	sampler  *wgpu.Sampler
+	// format is the swapchain/pipeline color format, kept so the pipeline can be
+	// rebuilt (e.g. the MSAA fallback) without re-deriving it.
+	format wgpu.TextureFormat
 
 	// samples is the MSAA sample count baked into the pipeline (1 = off). When
 	// >1 the render pass draws into msaaTex and resolves to the swapchain.

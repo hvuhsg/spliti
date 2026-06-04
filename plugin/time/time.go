@@ -30,6 +30,22 @@ func (t *Time) Elapsed() gotime.Duration { return t.elapsed }
 // FixedDelta is the configured fixed timestep duration.
 func (t *Time) FixedDelta() gotime.Duration { return t.fixedTimestep }
 
+// Alpha is the interpolation factor in [0,1) between the previous and current
+// fixed-update states. It is the fraction of a fixed step that has elapsed since
+// the last FixedUpdate ran (fixedAccum / fixedTimestep, measured after the fixed
+// loop consumed its whole steps for this frame).
+//
+// Render-time systems use it to draw lerp(prevState, curState, Alpha()) so a sim
+// running slower than the display (e.g. 64 Hz sim on a 120 Hz panel) still moves
+// smoothly instead of stepping. Read it from Update/PostUpdate; during a
+// FixedUpdate step it is whatever the previous frame left.
+func (t *Time) Alpha() float64 {
+	if t.fixedTimestep <= 0 {
+		return 0
+	}
+	return float64(t.fixedAccum) / float64(t.fixedTimestep)
+}
+
 // Plugin installs the Time resource, the per-frame ticker, the FixedUpdate
 // loop driver, and (optionally) frame pacing.
 type Plugin struct {

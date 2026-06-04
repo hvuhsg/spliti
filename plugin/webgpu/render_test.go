@@ -99,6 +99,61 @@ func TestNormalizeSamplesClampsToPortableCounts(t *testing.T) {
 	}
 }
 
+func TestPremultiplyAlpha(t *testing.T) {
+	// A fully opaque texel is unchanged; a half-alpha texel has rgb scaled by
+	// alpha/255; a fully transparent texel is zeroed in rgb (so it can't bleed).
+	pix := []byte{
+		200, 100, 50, 255, // opaque
+		200, 100, 50, 128, // half
+		200, 100, 50, 0, // transparent
+	}
+	premultiplyAlpha(pix)
+	want := []byte{
+		200, 100, 50, 255,
+		byte(200 * 128 / 255), byte(100 * 128 / 255), byte(50 * 128 / 255), 128,
+		0, 0, 0, 0,
+	}
+	for i := range want {
+		if pix[i] != want[i] {
+			t.Fatalf("premultiplyAlpha[%d] = %d, want %d (%v)", i, pix[i], want[i], pix)
+		}
+	}
+}
+
+func TestMipLevelCount(t *testing.T) {
+	cases := []struct {
+		w, h, want int
+	}{
+		{1, 1, 1},
+		{2, 2, 2},
+		{4, 4, 3},
+		{128, 128, 8}, // 128,64,32,16,8,4,2,1
+		{8, 1, 4},     // driven by the larger dim: 8,4,2,1
+		{5, 3, 3},     // 5->2->1 (3 levels)
+	}
+	for _, c := range cases {
+		if got := mipLevelCount(c.w, c.h); got != c.want {
+			t.Fatalf("mipLevelCount(%d,%d) = %d, want %d", c.w, c.h, got, c.want)
+		}
+	}
+}
+
+func TestDownsampleAveragesQuads(t *testing.T) {
+	// 2x2 -> 1x1: the single output texel is the average of all four inputs.
+	src := []byte{
+		0, 0, 0, 0, 100, 0, 0, 0, // row 0: two texels
+		200, 0, 0, 0, 40, 0, 0, 0, // row 1: two texels
+	}
+	dst := downsample(src, 2, 2, 1, 1)
+	if len(dst) != 4 {
+		t.Fatalf("dst len = %d, want 4", len(dst))
+	}
+	// (0+100+200+40+2)/4 = 85
+	if dst[0] != 85 {
+		t.Fatalf("downsample avg = %d, want 85", dst[0])
+	}
+}
+
 func TestColorOrDefault(t *testing.T) {
 	if got := (Color{}).orDefault(); got != opaqueWhite {
 		t.Fatalf("zero Color orDefault = %+v, want opaque white", got)
