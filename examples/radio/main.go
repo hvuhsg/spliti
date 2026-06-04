@@ -53,6 +53,14 @@ type uiState struct {
 
 	mfN    int // MultiFreq scene: number of subcarriers
 	mfSeed int // MultiFreq scene: data seed (changes the per-carrier symbols)
+
+	smpNSym int // Sampling scene: symbols packed into the fixed time window (sets symbol rate)
+	smpSps  int // Sampling scene: samples taken per symbol
+
+	ckNSym int // Carrier scene: symbols in the window (shared symbol rate of both rows)
+	ckCarB int // Carrier scene: carrier cycles/symbol of the fast row (peaks per symbol)
+
+	bwNSym int // Bandwidth scene: symbols in the window (shorter segments as it grows)
 }
 
 func main() {
@@ -93,6 +101,12 @@ func main() {
 	app.OnExit(a, Compose, teardownScene)
 	app.OnEnter(a, MultiFreq, setupMultiFreq)
 	app.OnExit(a, MultiFreq, teardownScene)
+	app.OnEnter(a, Sampling, setupSampling)
+	app.OnExit(a, Sampling, teardownScene)
+	app.OnEnter(a, Carrier, setupCarrier)
+	app.OnExit(a, Carrier, teardownScene)
+	app.OnEnter(a, Bandwidth, setupBandwidth)
+	app.OnExit(a, Bandwidth, teardownScene)
 
 	a.AddSystems(schedule.Startup, loadSharedTextures)
 
@@ -120,6 +134,12 @@ func main() {
 		app.System(composeDraw).RunIf(stateIs(Compose)),
 		app.System(multiFreqInput).RunIf(stateIs(MultiFreq)),
 		app.System(multiFreqDraw).RunIf(stateIs(MultiFreq)),
+		app.System(samplingInput).RunIf(stateIs(Sampling)),
+		app.System(samplingDraw).RunIf(stateIs(Sampling)),
+		app.System(carrierInput).RunIf(stateIs(Carrier)),
+		app.System(carrierDraw).RunIf(stateIs(Carrier)),
+		app.System(bandwidthInput).RunIf(stateIs(Bandwidth)),
+		app.System(bandwidthDraw).RunIf(stateIs(Bandwidth)),
 	)
 
 	a.Run()
@@ -147,6 +167,12 @@ func initialScene() Scene {
 		return Compose
 	case "multifreq":
 		return MultiFreq
+	case "sampling":
+		return Sampling
+	case "carrier":
+		return Carrier
+	case "bandwidth":
+		return Bandwidth
 	default:
 		return MainFlow
 	}

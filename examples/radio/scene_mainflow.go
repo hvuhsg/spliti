@@ -80,13 +80,22 @@ func setupMainFlow(c *app.Ctx) {
 	spawnSeries(cmds, seriesPacket, 1, 3.2, colSum)
 
 	// Legend.
-	spawnLabel(c, "mf:leg", "follow a bit's round trip: transmit on the left, receive on the right", worldW/2, 72, 3, colMuted, zLabel)
+	spawnLabel(c, "mf:leg", "follow a bit's round trip: transmit on the left, receive on the right", worldW/2, 69, 3, colMuted, zLabel)
 
-	// Capstones: canned message, write your own, denser modulation, many carriers.
-	spawnButton(c, "mf:msg", 6, 80, 35, 7, "FULL MSG  >", Message, colSum)
-	spawnButton(c, "mf:cmp", 44, 80, 35, 7, "WRITE MSG  >", Compose, colAccent)
-	spawnButton(c, "mf:qam", 82, 80, 35, 7, "16-QAM  >", QAM16, colI)
-	spawnButton(c, "mf:mfq", 120, 80, 35, 7, "MULTI-FREQ  >", MultiFreq, colQ)
+	// Capstone scenes in two centred rows: messages & modulation on top, the
+	// timing/bandwidth concepts below.
+	const capW, capH = 32.0, 6.5
+	capX := func(n, i int) float32 {
+		total := float32(n)*capW + float32(n-1)*4
+		return (worldW-total)/2 + float32(i)*(capW+4)
+	}
+	spawnButton(c, "mf:msg", capX(4, 0), 74, capW, capH, "FULL MSG  >", Message, colSum)
+	spawnButton(c, "mf:cmp", capX(4, 1), 74, capW, capH, "WRITE MSG  >", Compose, colAccent)
+	spawnButton(c, "mf:qam", capX(4, 2), 74, capW, capH, "16-QAM  >", QAM16, colI)
+	spawnButton(c, "mf:mfq", capX(4, 3), 74, capW, capH, "MULTI-FREQ  >", MultiFreq, colQ)
+	spawnButton(c, "mf:smp", capX(3, 0), 83, capW, capH, "SAMPLING  >", Sampling, colHi)
+	spawnButton(c, "mf:car", capX(3, 1), 83, capW, capH, "CARRIER  >", Carrier, colSum)
+	spawnButton(c, "mf:bw", capX(3, 2), 83, capW, capH, "BANDWIDTH  >", Bandwidth, colAccent)
 }
 
 // mainFlowUpdate sweeps the packet left to right across the pipeline, looping.

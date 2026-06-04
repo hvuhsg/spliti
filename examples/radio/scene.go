@@ -23,6 +23,9 @@ const (
 	QAM16                      // 16-QAM constellation (4 bits/symbol)
 	Compose                    // type your own message and see its wave
 	MultiFreq                  // multi-frequency (OFDM) overview
+	Sampling                   // symbol time + how often to sample
+	Carrier                    // why a higher carrier (more peaks) is not more data
+	Bandwidth                  // why segments can't shrink: band-limiting + ISI
 )
 
 // Layer Z bands keep draw order stable regardless of archetype iteration order:
