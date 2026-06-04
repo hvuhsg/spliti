@@ -50,6 +50,20 @@ type Plugin struct {
 	// renderer presents as fast as the surface allows (Immediate), falling back
 	// to FIFO if the platform lacks it.
 	VSync bool
+
+	// Samples requests multisample anti-aliasing (MSAA), smoothing sprite-quad
+	// edges. WebGPU portably supports 1 (off) and 4; any value >1 is treated as
+	// 4. Note MSAA only anti-aliases geometry edges, so axis-aligned, integer-
+	// positioned pixel-art sprites see little change — it pays off for rotated,
+	// non-integer-scaled, or camera-zoomed content. Zero/1 leaves MSAA off.
+	Samples int
+
+	// Smooth switches texture sampling from Nearest (crisp pixel art, the
+	// default) to Linear. This is what anti-aliases ordinary sprite edges — whose
+	// shape lives in the texture's alpha — and needs no MSAA target, so it's far
+	// cheaper than Samples for that purpose. Independent of Samples: the two
+	// smooth different edges (texture alpha vs. quad geometry) and compose freely.
+	Smooth bool
 }
 
 // GPU is the shared rendering resource. Systems read it via
@@ -65,6 +79,15 @@ type GPU struct {
 
 	pipeline *wgpu.RenderPipeline
 	sampler  *wgpu.Sampler
+
+	// samples is the MSAA sample count baked into the pipeline (1 = off). When
+	// >1 the render pass draws into msaaTex and resolves to the swapchain.
+	samples  uint32
+	msaaTex  *wgpu.Texture
+	msaaView *wgpu.TextureView
+
+	// smooth selects Linear texture filtering (vs. Nearest) for the sampler.
+	smooth bool
 
 	quadBuf     *wgpu.Buffer
 	instanceBuf *wgpu.Buffer
@@ -178,6 +201,8 @@ func (p Plugin) Build(a *app.App) {
 		device:   device,
 		queue:    queue,
 		config:   config,
+		samples:  normalizeSamples(p.Samples),
+		smooth:   p.Smooth,
 		clearColor: wgpu.Color{
 			R: float64(p.ClearColor.R),
 			G: float64(p.ClearColor.G),
@@ -188,6 +213,9 @@ func (p Plugin) Build(a *app.App) {
 
 	// Pipeline, sampler, buffers, camera bind group.
 	buildPipeline(g, config.Format)
+
+	// MSAA color target (no-op when Samples <= 1). Recreated on resize.
+	ensureMSAATarget(g)
 
 	// Camera: default the world rect to the framebuffer pixel size.
 	cam := &Camera{WorldW: p.WorldW, WorldH: p.WorldH}
@@ -243,6 +271,12 @@ func writeCamera(g *GPU, cam *Camera) {
 // GLFW down. Safe to call once on exit (including on panic via AddOnExit).
 func releaseGPU(g *GPU) {
 	g.registry.releaseAll()
+	if g.msaaView != nil {
+		g.msaaView.Release()
+	}
+	if g.msaaTex != nil {
+		g.msaaTex.Release()
+	}
 	if g.cameraBindGroup != nil {
 		g.cameraBindGroup.Release()
 	}

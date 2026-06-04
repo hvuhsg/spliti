@@ -36,6 +36,8 @@ The plugin's fields:
 | `WorldW, WorldH` | The visible world rectangle mapped to the window. **Zero** → use the framebuffer pixel size (one world unit == one pixel). |
 | `ClearColor`     | Background fill each frame. Zero value is opaque black.                 |
 | `VSync`          | `true` caps to the display refresh (FIFO). `false` presents as fast as the surface allows (Immediate), falling back to FIFO if unsupported. |
+| `Smooth`         | `false` (default) samples textures with **Nearest** (crisp pixel art); `true` uses **Linear**, which anti-aliases ordinary sprite edges (whose shape lives in the texture's alpha). This is the cheap, effective AA for 2D sprites — no MSAA target needed. |
+| `Samples`        | Multisample anti-aliasing (MSAA) on sprite-quad **geometry** edges. `0`/`1` off; any value `>1` is treated as `4` (the portably-supported count). Does **not** touch texture-alpha edges, so axis-aligned alpha-cutout sprites change little — it pays off for rotated, non-integer-scaled, or camera-zoomed content. For smooth sprite edges use `Smooth`, not this. |
 
 ### The main-thread rule
 

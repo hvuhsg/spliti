@@ -66,6 +66,9 @@ func applyResize(c *app.Ctx, g *GPU) {
 	g.config.Height = uint32(h)
 	g.surface.Configure(g.adapter, g.device, g.config)
 
+	// The MSAA target is sized to the surface; rebuild it for the new dimensions.
+	ensureMSAATarget(g)
+
 	if !g.pixelCamera {
 		return
 	}

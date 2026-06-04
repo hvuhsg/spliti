@@ -72,13 +72,22 @@ func renderSystem(c *app.Ctx) {
 		tex.Release()
 		return
 	}
+	// With MSAA on, draw into the multisampled texture and resolve into the
+	// swapchain view; the multisampled samples themselves need not be stored.
+	// With MSAA off, draw straight into the swapchain view.
+	color := wgpu.RenderPassColorAttachment{
+		View:       view,
+		LoadOp:     wgpu.LoadOpClear,
+		StoreOp:    wgpu.StoreOpStore,
+		ClearValue: g.clearColor,
+	}
+	if g.msaaView != nil {
+		color.View = g.msaaView
+		color.ResolveTarget = view
+		color.StoreOp = wgpu.StoreOpDiscard
+	}
 	pass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
-		ColorAttachments: []wgpu.RenderPassColorAttachment{{
-			View:       view,
-			LoadOp:     wgpu.LoadOpClear,
-			StoreOp:    wgpu.StoreOpStore,
-			ClearValue: g.clearColor,
-		}},
+		ColorAttachments: []wgpu.RenderPassColorAttachment{color},
 	})
 
 	g.curTex, g.curView, g.curEncoder, g.curPass = tex, view, encoder, pass
