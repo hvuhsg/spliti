@@ -121,7 +121,13 @@ type GPU struct {
 
 	// Input buffers filled by GLFW callbacks during PollEvents and drained by
 	// the input system in the same (main) goroutine — no locking needed.
-	keyEvents []KeyEvent
+	keyEvents   []KeyEvent
+	mouseButton []MouseButtonEvent
+	mouseMove   []MouseMoveEvent
+
+	// cursorX, cursorY track the latest cursor position (window coords) so a
+	// button event can be stamped with where the click landed.
+	cursorX, cursorY float64
 
 	// Reusable per-frame scratch, like tui's reused layered buffer: collected
 	// renderables, packed instance data (in draw order), and texture batches.
@@ -251,6 +257,15 @@ func (p Plugin) Build(a *app.App) {
 	})
 	win.SetCharCallback(func(_ *glfw.Window, r rune) {
 		g.keyEvents = append(g.keyEvents, KeyEvent{Rune: r, Action: glfw.Press})
+	})
+	win.SetCursorPosCallback(func(_ *glfw.Window, xpos, ypos float64) {
+		g.cursorX, g.cursorY = xpos, ypos
+		g.mouseMove = append(g.mouseMove, MouseMoveEvent{X: xpos, Y: ypos})
+	})
+	win.SetMouseButtonCallback(func(_ *glfw.Window, button glfw.MouseButton, action glfw.Action, mods glfw.ModifierKey) {
+		g.mouseButton = append(g.mouseButton, MouseButtonEvent{
+			Button: button, Action: action, Mods: mods, X: g.cursorX, Y: g.cursorY,
+		})
 	})
 
 	a.AddOnExit(func() { releaseGPU(g) })

@@ -8,6 +8,7 @@ require (
 	github.com/gdamore/tcell/v2 v2.13.9
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20240506104042-037f3cc74f2a
 	github.com/mlange-42/arche v0.15.3
+	golang.org/x/image v0.34.0
 )
 
 require (
@@ -16,5 +17,5 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/term v0.37.0 // indirect
-	golang.org/x/text v0.31.0 // indirect
+	golang.org/x/text v0.32.0 // indirect
 )

@@ -47,6 +47,16 @@ func pollInput(c *app.Ctx) {
 	}
 	g.keyEvents = g.keyEvents[:0]
 
+	for _, ev := range g.mouseMove {
+		app.SendEvent(c, ev)
+	}
+	g.mouseMove = g.mouseMove[:0]
+
+	for _, ev := range g.mouseButton {
+		app.SendEvent(c, ev)
+	}
+	g.mouseButton = g.mouseButton[:0]
+
 	if g.window.ShouldClose() {
 		app.SendEvent(c, CloseEvent{})
 		c.App().Stop()
