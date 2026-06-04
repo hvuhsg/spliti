@@ -38,5 +38,11 @@ fn vs_main(in : VsIn) -> VsOut {
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-    return textureSample(tex, samp, in.uv) * in.tint;
+    // Textures are stored premultiplied (rgb already scaled by their own alpha),
+    // so the sampled value is premultiplied and ready for One/OneMinusSrcAlpha
+    // blending. Tinting keeps it premultiplied: multiply rgb by the (straight)
+    // tint color, then scale the whole texel by the tint's alpha so partial tint
+    // transparency dims rgb and alpha together.
+    let s = textureSample(tex, samp, in.uv);
+    return vec4<f32>(s.rgb * in.tint.rgb, s.a) * in.tint.a;
 }

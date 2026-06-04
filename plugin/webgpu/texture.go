@@ -46,32 +46,57 @@ func (r *TextureRegistry) Load(ref string, img image.Image) error {
 	}
 	g := r.gpu
 
-	extent := wgpu.Extent3D{Width: uint32(w), Height: uint32(h), DepthOrArrayLayers: 1}
+	// Premultiply alpha into a fresh copy (toRGBA may alias the caller's image,
+	// so never mutate rgba.Pix in place). Premultiplied texels keep linear
+	// filtering and blending correct across alpha edges, and let the mip chain be
+	// built by a plain box filter — averaging premultiplied colors is the correct
+	// downsample, whereas averaging straight-alpha colors bleeds transparent
+	// texels inward. (Both happen in the sRGB-encoded byte domain; gamma-correct
+	// linear-space resampling is the separate, larger color-management gap.)
+	base := make([]byte, len(rgba.Pix))
+	copy(base, rgba.Pix)
+	premultiplyAlpha(base)
+
+	levels := mipLevelCount(w, h)
 	tex, err := g.device.CreateTexture(&wgpu.TextureDescriptor{
 		Label:         "spliti.webgpu.tex." + ref,
 		Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
 		Dimension:     wgpu.TextureDimension2D,
-		Size:          extent,
+		Size:          wgpu.Extent3D{Width: uint32(w), Height: uint32(h), DepthOrArrayLayers: 1},
 		Format:        wgpu.TextureFormatRGBA8UnormSrgb,
-		MipLevelCount: 1,
+		MipLevelCount: uint32(levels),
 		SampleCount:   1,
 	})
 	if err != nil {
 		return fmt.Errorf("webgpu: create texture %q: %w", ref, err)
 	}
 
-	if err := g.queue.WriteTexture(
-		tex.AsImageCopy(),
-		wgpu.ToBytes(rgba.Pix),
-		&wgpu.TextureDataLayout{
-			Offset:       0,
-			BytesPerRow:  uint32(4 * w),
-			RowsPerImage: uint32(h),
-		},
-		&extent,
-	); err != nil {
-		tex.Release()
-		return fmt.Errorf("webgpu: write texture %q: %w", ref, err)
+	// Upload level 0, then box-downsample each successive level on the CPU and
+	// upload it. WebGPU has no built-in mip generation, so we build the chain
+	// here; a colored sprite scaled down now samples a matching mip instead of
+	// shimmering on the full-res texels.
+	cur, cw, ch := base, w, h
+	for lvl := 0; lvl < levels; lvl++ {
+		dst := tex.AsImageCopy()
+		dst.MipLevel = uint32(lvl)
+		if err := g.queue.WriteTexture(
+			dst,
+			wgpu.ToBytes(cur),
+			&wgpu.TextureDataLayout{
+				Offset:       0,
+				BytesPerRow:  uint32(4 * cw),
+				RowsPerImage: uint32(ch),
+			},
+			&wgpu.Extent3D{Width: uint32(cw), Height: uint32(ch), DepthOrArrayLayers: 1},
+		); err != nil {
+			tex.Release()
+			return fmt.Errorf("webgpu: write texture %q level %d: %w", ref, lvl, err)
+		}
+		if lvl < levels-1 {
+			nw, nh := max(1, cw/2), max(1, ch/2)
+			cur = downsample(cur, cw, ch, nw, nh)
+			cw, ch = nw, nh
+		}
 	}
 
 	view, err := tex.CreateView(nil)
@@ -130,6 +155,54 @@ func (t *gpuTexture) release() {
 	if t.texture != nil {
 		t.texture.Release()
 	}
+}
+
+// premultiplyAlpha scales each texel's rgb by its own alpha, in place. Operates
+// on a tightly packed RGBA8 byte slice (4 bytes/texel).
+func premultiplyAlpha(pix []byte) {
+	for i := 0; i+3 < len(pix); i += 4 {
+		a := uint32(pix[i+3])
+		pix[i+0] = byte(uint32(pix[i+0]) * a / 255)
+		pix[i+1] = byte(uint32(pix[i+1]) * a / 255)
+		pix[i+2] = byte(uint32(pix[i+2]) * a / 255)
+	}
+}
+
+// mipLevelCount returns the number of mip levels for a w×h texture: one per
+// halving down to 1×1 (the standard floor(log2(max(w,h)))+1).
+func mipLevelCount(w, h int) int {
+	n := 1
+	for w > 1 || h > 1 {
+		w, h = max(1, w/2), max(1, h/2)
+		n++
+	}
+	return n
+}
+
+// downsample box-filters a packed RGBA8 image from sw×sh to dw×dh (each roughly
+// half), averaging 2×2 source texels per destination texel. The input must be
+// premultiplied so the average is a correct color resample. Odd source
+// dimensions clamp the far sample to the last row/column.
+func downsample(src []byte, sw, sh, dw, dh int) []byte {
+	dst := make([]byte, dw*dh*4)
+	for y := 0; y < dh; y++ {
+		sy0 := y * 2
+		sy1 := min(sy0+1, sh-1)
+		for x := 0; x < dw; x++ {
+			sx0 := x * 2
+			sx1 := min(sx0+1, sw-1)
+			i00 := (sy0*sw + sx0) * 4
+			i01 := (sy0*sw + sx1) * 4
+			i10 := (sy1*sw + sx0) * 4
+			i11 := (sy1*sw + sx1) * 4
+			d := (y*dw + x) * 4
+			for c := 0; c < 4; c++ {
+				sum := uint32(src[i00+c]) + uint32(src[i01+c]) + uint32(src[i10+c]) + uint32(src[i11+c])
+				dst[d+c] = byte((sum + 2) / 4)
+			}
+		}
+	}
+	return dst
 }
 
 // toRGBA returns img as an *image.RGBA with its origin at (0,0), copying when
