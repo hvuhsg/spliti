@@ -23,8 +23,10 @@ type Vertex struct {
 
 const vertexStride = 32 // bytes; sizeof(Vertex)
 
-// instanceStride is the size of one per-instance model matrix (mat4 = 16 floats).
-const instanceStride = 64
+// instanceStride is the size of one per-instance record: a model matrix (mat4 =
+// 16 floats = 64 B) followed by an RGBA tint (vec4 = 16 B). Must match
+// instanceData in render.go and the @location(4..8) instance attributes below.
+const instanceStride = 80
 
 const (
 	initialInstanceCap = 256
@@ -92,9 +94,13 @@ func buildPipeline(g *GPU) {
 		panic("render3d: material bgl: " + err.Error())
 	}
 
-	g.pipeline, err = buildRenderPipeline(g)
+	g.pipeline, err = buildRenderPipeline(g, false)
 	if err != nil {
 		panic("render3d: render pipeline: " + err.Error())
+	}
+	g.transparentPipeline, err = buildRenderPipeline(g, true)
+	if err != nil {
+		panic("render3d: transparent pipeline: " + err.Error())
 	}
 
 	g.instanceCap = initialInstanceCap
@@ -136,7 +142,11 @@ func newFrameBindGroup(g *GPU) *wgpu.BindGroup {
 // pipeline using the current g.samples / g.format / g.depthFormat. Split out so
 // the MSAA fallback can rebuild at a different sample count. Requires g.frameBGL
 // and g.materialBGL to already exist.
-func buildRenderPipeline(g *GPU) (*wgpu.RenderPipeline, error) {
+//
+// When transparent is true the pipeline uses premultiplied-alpha blending with
+// depth-test ON but depth-write OFF, and no back-face culling — the configuration
+// for translucent shells drawn back-to-front over the opaque scene.
+func buildRenderPipeline(g *GPU, transparent bool) (*wgpu.RenderPipeline, error) {
 	shader, err := g.device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
 		Label:          "spliti.render3d.shader",
 		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaderCode},
@@ -171,7 +181,7 @@ func buildRenderPipeline(g *GPU) (*wgpu.RenderPipeline, error) {
 						{Format: wgpu.VertexFormatFloat32x2, Offset: 24, ShaderLocation: 2}, // uv
 					},
 				},
-				{ // buffer 1: per-instance model matrix (4x vec4)
+				{ // buffer 1: per-instance model matrix (4x vec4) + RGBA tint
 					ArrayStride: instanceStride,
 					StepMode:    wgpu.VertexStepModeInstance,
 					Attributes: []wgpu.VertexAttribute{
@@ -179,6 +189,7 @@ func buildRenderPipeline(g *GPU) (*wgpu.RenderPipeline, error) {
 						{Format: wgpu.VertexFormatFloat32x4, Offset: 16, ShaderLocation: 5},
 						{Format: wgpu.VertexFormatFloat32x4, Offset: 32, ShaderLocation: 6},
 						{Format: wgpu.VertexFormatFloat32x4, Offset: 48, ShaderLocation: 7},
+						{Format: wgpu.VertexFormatFloat32x4, Offset: 64, ShaderLocation: 8}, // tint
 					},
 				},
 			},
@@ -186,11 +197,11 @@ func buildRenderPipeline(g *GPU) (*wgpu.RenderPipeline, error) {
 		Primitive: wgpu.PrimitiveState{
 			Topology:  wgpu.PrimitiveTopologyTriangleList,
 			FrontFace: wgpu.FrontFaceCCW,
-			CullMode:  wgpu.CullModeBack, // meshes are closed solids, CCW front faces
+			CullMode:  cullMode(transparent),
 		},
 		DepthStencil: &wgpu.DepthStencilState{
 			Format:            g.depthFormat,
-			DepthWriteEnabled: true,
+			DepthWriteEnabled: !transparent, // translucent geometry tests but does not write depth
 			DepthCompare:      wgpu.CompareFunctionLess,
 			StencilFront:      wgpu.StencilFaceState{Compare: wgpu.CompareFunctionAlways},
 			StencilBack:       wgpu.StencilFaceState{Compare: wgpu.CompareFunctionAlways},
@@ -201,11 +212,41 @@ func buildRenderPipeline(g *GPU) (*wgpu.RenderPipeline, error) {
 			EntryPoint: "fs_main",
 			Targets: []wgpu.ColorTargetState{{
 				Format:    g.format,
-				Blend:     nil, // opaque
+				Blend:     blendState(transparent),
 				WriteMask: wgpu.ColorWriteMaskAll,
 			}},
 		},
 	})
+}
+
+// cullMode returns back-face culling for opaque solids and no culling for
+// transparent shells (whose inner faces should still contribute).
+func cullMode(transparent bool) wgpu.CullMode {
+	if transparent {
+		return wgpu.CullModeNone
+	}
+	return wgpu.CullModeBack
+}
+
+// blendState returns premultiplied-alpha blending for the transparent pipeline
+// (src + dst*(1-srcAlpha)) and nil (opaque overwrite) otherwise. The shader emits
+// premultiplied color for transparent draws so this matches.
+func blendState(transparent bool) *wgpu.BlendState {
+	if !transparent {
+		return nil
+	}
+	return &wgpu.BlendState{
+		Color: wgpu.BlendComponent{
+			SrcFactor: wgpu.BlendFactorOne,
+			DstFactor: wgpu.BlendFactorOneMinusSrcAlpha,
+			Operation: wgpu.BlendOperationAdd,
+		},
+		Alpha: wgpu.BlendComponent{
+			SrcFactor: wgpu.BlendFactorOne,
+			DstFactor: wgpu.BlendFactorOneMinusSrcAlpha,
+			Operation: wgpu.BlendOperationAdd,
+		},
+	}
 }
 
 // newInstanceBuffer allocates an instance vertex buffer for capacity model matrices.
@@ -322,12 +363,19 @@ func disableMSAA(g *GPU) {
 		return
 	}
 	g.samples = 1
-	p, err := buildRenderPipeline(g)
+	p, err := buildRenderPipeline(g, false)
 	if err != nil {
+		return
+	}
+	tp, err := buildRenderPipeline(g, true)
+	if err != nil {
+		p.Release()
 		return
 	}
 	g.pipeline.Release()
 	g.pipeline = p
+	g.transparentPipeline.Release()
+	g.transparentPipeline = tp
 	ensureDepthTarget(g)
 }
 

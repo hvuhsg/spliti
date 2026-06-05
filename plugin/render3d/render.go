@@ -18,6 +18,8 @@ const (
 	transformLabel = "__render3d_transform"
 	frameLabel     = "__render3d_frame"
 	renderLabel    = "__render3d_render"
+	gizmoLabel     = "__render3d_gizmo"
+	overlayLabel   = "__render3d_overlay"
 	presentLabel   = "__render3d_present"
 )
 
@@ -26,6 +28,16 @@ type renderItem struct {
 	mesh     string
 	material string
 	model    m.Mat4
+	color    m.Vec4  // per-instance tint (default white when no InstanceColor)
+	depth    float32 // squared camera distance, used to sort the transparent pass
+}
+
+// instanceData is the per-instance GPU record: a model matrix followed by an
+// RGBA tint. Its size must equal instanceStride (80 bytes); the layout matches
+// the @location(4..8) instance vertex attributes in pbr.wgsl.
+type instanceData struct {
+	model m.Mat4
+	color m.Vec4
 }
 
 // meshBatch is a contiguous run of instances sharing a mesh and material, drawn
@@ -46,6 +58,10 @@ func installSystems(a *app.App) {
 	a.AddSystems(schedule.PostUpdate,
 		app.System(writeFrameUniforms).Label(frameLabel).Before(renderLabel).After(transformLabel))
 	a.AddSystems(schedule.PostUpdate, app.System(renderSystem).Label(renderLabel))
+	a.AddSystems(schedule.PostUpdate,
+		app.System(drawGizmos).Label(gizmoLabel).After(renderLabel).Before(overlayLabel))
+	a.AddSystems(schedule.PostUpdate,
+		app.System(drawOverlay2D).Label(overlayLabel).After(gizmoLabel).Before(presentLabel))
 	a.AddSystems(schedule.PostUpdate,
 		app.System(presentSystem).Label(presentLabel).After(renderLabel))
 }
@@ -163,18 +179,25 @@ func renderSystem(c *app.Ctx) {
 }
 
 // drawMeshes collects MeshRenderer+GlobalTransform entities (optional
-// MaterialRef), groups them by mesh+material into instanced draws, uploads all
-// model matrices once, and issues one DrawIndexed per batch.
+// MaterialRef / InstanceColor / Transparent), draws opaque ones grouped by
+// mesh+material into instanced batches, then draws Transparent ones back-to-front
+// with the blended pipeline. All instance records (model matrix + tint) are
+// uploaded once into the shared instance buffer: opaque batches first, then the
+// sorted transparent instances.
 func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 	meshes := app.GetResource[MeshRegistry](c)
 	materials := app.GetResource[MaterialRegistry](c)
 	if meshes == nil || materials == nil {
 		return
 	}
+	cam := app.GetResource[Camera3D](c)
 	world := c.World()
 	matRefMap := generic.NewMap[MaterialRef](world)
+	colorMap := generic.NewMap[InstanceColor](world)
+	transparentMap := generic.NewMap[Transparent](world)
 
 	g.items = g.items[:0]
+	g.tItems = g.tItems[:0]
 	app.Query2[MeshRenderer, GlobalTransform](c, func(e ecs.Entity, mr *MeshRenderer, gt *GlobalTransform) {
 		if meshes.get(mr.Mesh) == nil {
 			return // unknown mesh: skip
@@ -183,18 +206,46 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 		if matRefMap.Has(e) {
 			mat = matRefMap.Get(e).Material
 		}
-		g.items = append(g.items, renderItem{mesh: mr.Mesh, material: mat, model: gt.Matrix})
+		col := m.Vec4{X: 1, Y: 1, Z: 1, W: 1}
+		if colorMap.Has(e) {
+			col = colorMap.Get(e).orWhite()
+		}
+		it := renderItem{mesh: mr.Mesh, material: mat, model: gt.Matrix, color: col}
+		if transparentMap.Has(e) {
+			it.depth = cameraDepthSq(cam, gt.Matrix)
+			g.tItems = append(g.tItems, it)
+		} else {
+			g.items = append(g.items, it)
+		}
 	})
-	if len(g.items) == 0 {
-		return
+
+	g.scratch = g.scratch[:0]
+	g.batches = g.batches[:0]
+
+	// Opaque: batch by (mesh, material); depth buffer handles ordering.
+	opaqueCount := 0
+	if len(g.items) > 0 {
+		g.scratch, g.batches = packMeshInstances(g.items, g.scratch, g.batches)
+		opaqueCount = len(g.scratch)
 	}
 
-	g.scratch, g.batches = packMeshInstances(g.items, g.scratch[:0], g.batches[:0])
+	// Transparent: sort back-to-front (far first) so blending composites correctly
+	// without depth writes; a sorted set can't be instance-batched, so each draws
+	// as a single instance appended after the opaque records.
+	sort.SliceStable(g.tItems, func(i, j int) bool { return g.tItems[i].depth > g.tItems[j].depth })
+	for _, it := range g.tItems {
+		g.scratch = append(g.scratch, instanceData{model: it.model, color: it.color})
+	}
 
+	if len(g.scratch) == 0 {
+		return
+	}
 	ensureInstanceCap(g, len(g.scratch))
 	if err := g.queue.WriteBuffer(g.instanceBuf, 0, wgpu.ToBytes(g.scratch)); err != nil {
 		return
 	}
+
+	// Opaque draws use the pipeline + frame bind group already bound by renderSystem.
 	for _, b := range g.batches {
 		gm := meshes.get(b.mesh)
 		if gm == nil {
@@ -212,6 +263,35 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 		pass.SetIndexBuffer(gm.ibuf, wgpu.IndexFormatUint32, 0, gm.ibuf.GetSize())
 		pass.DrawIndexed(gm.indexCount, uint32(b.count), 0, 0, 0)
 	}
+
+	// Transparent draws: switch to the blended pipeline (group-0 frame bind group
+	// is layout-compatible and stays bound) and draw each sorted instance.
+	if len(g.tItems) > 0 {
+		pass.SetPipeline(g.transparentPipeline)
+		for i, it := range g.tItems {
+			gm := meshes.get(it.mesh)
+			if gm == nil {
+				continue
+			}
+			mat := materials.get(it.material)
+			off := uint64((opaqueCount + i) * instanceStride)
+			pass.SetBindGroup(1, mat.bindGroup, nil)
+			pass.SetVertexBuffer(0, gm.vbuf, 0, gm.vbuf.GetSize())
+			pass.SetVertexBuffer(1, g.instanceBuf, off, uint64(instanceStride))
+			pass.SetIndexBuffer(gm.ibuf, wgpu.IndexFormatUint32, 0, gm.ibuf.GetSize())
+			pass.DrawIndexed(gm.indexCount, 1, 0, 0, 0)
+		}
+	}
+}
+
+// cameraDepthSq returns the squared distance from the camera to an instance's
+// world-space origin (model translation), used to sort the transparent pass.
+func cameraDepthSq(cam *Camera3D, model m.Mat4) float32 {
+	if cam == nil {
+		return 0
+	}
+	d := m.Vec3{X: model[12], Y: model[13], Z: model[14]}.Sub(cam.Position)
+	return d.LengthSq()
 }
 
 // packMeshInstances sorts items by (mesh, material) so identical pairs are
@@ -219,7 +299,7 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 // and the contiguous same-(mesh,material) batches. Pure: the destination slices
 // are reused (pass them pre-truncated). Depth ordering is handled by the depth
 // buffer, so draw order within the frame is free to optimize for batching.
-func packMeshInstances(items []renderItem, scratch []m.Mat4, batches []meshBatch) ([]m.Mat4, []meshBatch) {
+func packMeshInstances(items []renderItem, scratch []instanceData, batches []meshBatch) ([]instanceData, []meshBatch) {
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].mesh != items[j].mesh {
 			return items[i].mesh < items[j].mesh
@@ -227,7 +307,7 @@ func packMeshInstances(items []renderItem, scratch []m.Mat4, batches []meshBatch
 		return items[i].material < items[j].material
 	})
 	for i, it := range items {
-		scratch = append(scratch, it.model)
+		scratch = append(scratch, instanceData{model: it.model, color: it.color})
 		if i > 0 && it.mesh == items[i-1].mesh && it.material == items[i-1].material {
 			batches[len(batches)-1].count++
 		} else {

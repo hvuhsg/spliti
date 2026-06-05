@@ -91,6 +91,9 @@ type GPU struct {
 	config   *wgpu.SurfaceConfiguration
 
 	pipeline *wgpu.RenderPipeline
+	// transparentPipeline shares the layout and shader but blends with depth-write
+	// off, for the back-to-front translucent pass after opaque geometry.
+	transparentPipeline *wgpu.RenderPipeline
 	// format is the swapchain/pipeline color format; depthFormat is the
 	// depth-stencil attachment format. Both kept so the pipeline can be rebuilt
 	// (the MSAA fallback) without re-deriving them.
@@ -122,6 +125,8 @@ type GPU struct {
 
 	meshes    *MeshRegistry // back-references so teardown frees GPU resources
 	materials *MaterialRegistry
+	gizmo     *GizmoBuffer
+	overlay   *Overlay2D
 
 	clearColor wgpu.Color
 	ambient    m.Vec3
@@ -142,7 +147,8 @@ type GPU struct {
 	// Reusable per-frame scratch (collected renderables, packed model matrices,
 	// mesh+material batches, packed point lights) to avoid steady-state allocation.
 	items     []renderItem
-	scratch   []m.Mat4
+	tItems    []renderItem // transparent items, sorted back-to-front each frame
+	scratch   []instanceData
 	batches   []meshBatch
 	collected []collectedPoint
 	lights    []pointLightGPU
@@ -253,6 +259,10 @@ func (p Plugin) Build(a *app.App) {
 	app.InsertResource(a, cam)
 	app.InsertResource(a, meshes)
 	app.InsertResource(a, materials)
+	g.gizmo = newGizmoBuffer(g)
+	g.overlay = newOverlay2D(g)
+	app.InsertResource(a, g.gizmo)
+	app.InsertResource(a, g.overlay)
 
 	win.SetFramebufferSizeCallback(func(_ *glfw.Window, w, h int) {
 		g.pendingW, g.pendingH = w, h
@@ -306,6 +316,12 @@ func containsPresentMode(modes []wgpu.PresentMode, mode wgpu.PresentMode) bool {
 func releaseGPU(g *GPU) {
 	g.meshes.releaseAll()
 	g.materials.releaseAll()
+	if g.gizmo != nil {
+		g.gizmo.release()
+	}
+	if g.overlay != nil {
+		g.overlay.release()
+	}
 	if g.depthView != nil {
 		g.depthView.Release()
 	}
@@ -329,6 +345,9 @@ func releaseGPU(g *GPU) {
 	}
 	if g.instanceBuf != nil {
 		g.instanceBuf.Release()
+	}
+	if g.transparentPipeline != nil {
+		g.transparentPipeline.Release()
 	}
 	if g.pipeline != nil {
 		g.pipeline.Release()

@@ -63,6 +63,32 @@ type MeshRenderer struct{ Mesh string }
 // default material.
 type MaterialRef struct{ Material string }
 
+// InstanceColor tints a MeshRenderer per instance: the shader multiplies it into
+// the material's base color (RGB) and alpha. It lets thousands of entities that
+// share one mesh+material be colored individually (heatmap cells, wavefront
+// samples) without a material per color. Absent means no tint (opaque white).
+//
+// The zero value (all components 0) is treated as "no tint" — i.e. white,1 —
+// since a literally-black, fully-transparent tint is never useful; use a small
+// nonzero alpha if you genuinely want near-black.
+type InstanceColor struct{ R, G, B, A float32 }
+
+// orWhite returns the tint, mapping the zero value to opaque white so an
+// uninitialized component renders the surface untinted.
+func (c InstanceColor) orWhite() m.Vec4 {
+	if c == (InstanceColor{}) {
+		return m.Vec4{X: 1, Y: 1, Z: 1, W: 1}
+	}
+	return m.Vec4{X: c.R, Y: c.G, Z: c.B, W: c.A}
+}
+
+// Transparent tags a MeshRenderer for the translucent draw pass: it is rendered
+// after all opaque geometry, sorted back-to-front, with alpha blending and depth
+// writes disabled (so overlapping translucent surfaces don't occlude each other).
+// Use it for wavefront shells and other see-through illustrative geometry. The
+// alpha comes from the material base color and/or InstanceColor.
+type Transparent struct{}
+
 // DirectionalLight is an infinitely-distant light (like the sun): all rays are
 // parallel along Direction. Color is linear RGB and Intensity scales it. The
 // renderer uses a single directional light (the last one queried wins).
