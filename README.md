@@ -57,7 +57,7 @@ Working today:
 - The engine keeps owning the loop in every case — no render backend takes over `app.Run()`.
 - **Visual editor**: a tcell-based editor (`editor/`) for authoring scenes from data — entities, components, and behaviors from the `runtime` plugin's built-in vocabulary, saved/loaded as project files. See `examples/editor-demo`.
 - TCP **lockstep multiplayer** for 2..N players. Drop in `network.Plugin`, read `PlayerKey` events, stay deterministic. See [docs/network.md](docs/network.md).
-- Examples: single-player Snake (`examples/snake`), networked two-player Snake (`examples/snake-net`), a networked stick-figure fighter (`examples/stick-fight`), a single-player fighter vs AI (`examples/stick-fight-ai`), an auto-shooter (`examples/survivors`), a first-person raycaster (`examples/doom`), and five arcade classics — Pong, Tetris, Breakout, Space Invaders, and Pac-Man. GPU showcases: the 2D `examples/gpu-demo`, the 3D `examples/render3d-demo`, an interactive radio-wave teaching game (`examples/radio`), and a 3D radio-propagation visualizer (`examples/radio3d`).
+- Examples: single-player Snake (`examples/snake`), networked two-player Snake (`examples/snake-net`), a networked stick-figure fighter (`examples/stick-fight`), a single-player fighter vs AI (`examples/stick-fight-ai`), an auto-shooter (`examples/survivors`), a first-person raycaster (`examples/doom`), and five arcade classics — Pong, Tetris, Breakout, Space Invaders, and Pac-Man. GPU showcases: the 2D `examples/gpu-demo`, the 3D `examples/render3d-demo`, an interactive radio-wave teaching game (`examples/radio`), a 3D radio-propagation visualizer (`examples/radio3d`), and a physically-accurate, broadband radio-wave simulator (`examples/radiosim`) with Fresnel materials, wall transmission, UTD/knife-edge diffraction, a thermal-noise receiver chain, atmospheric loss, and a swappable image-method / real-time SBR engine.
 
 Out of scope today: parallel scheduling, NAT traversal, rollback netcode, hot reload. None of these are precluded — the engine is small enough to grow into them.
 
@@ -102,6 +102,7 @@ CGO_ENABLED=1 go run github.com/hvuhsg/spliti/examples/gpu-demo        # 2D text
 CGO_ENABLED=1 go run github.com/hvuhsg/spliti/examples/render3d-demo   # 3D PBR scene
 CGO_ENABLED=1 go run github.com/hvuhsg/spliti/examples/radio          # 2D radio teaching game
 CGO_ENABLED=1 go run github.com/hvuhsg/spliti/examples/radio3d        # 3D radio-wave propagation
+CGO_ENABLED=1 go run github.com/hvuhsg/spliti/examples/radiosim       # accurate radio-wave simulator
 ```
 
 Snake controls: arrow keys or WASD, `q` to quit, `r` to restart on game over.
