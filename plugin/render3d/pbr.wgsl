@@ -36,11 +36,12 @@ struct VsIn {
     @location(0) position : vec3<f32>,
     @location(1) normal   : vec3<f32>,
     @location(2) uv       : vec2<f32>,
-    // Per-instance model matrix columns.
-    @location(4) m0 : vec4<f32>,
-    @location(5) m1 : vec4<f32>,
-    @location(6) m2 : vec4<f32>,
-    @location(7) m3 : vec4<f32>,
+    // Per-instance model matrix columns + RGBA tint.
+    @location(4) m0   : vec4<f32>,
+    @location(5) m1   : vec4<f32>,
+    @location(6) m2   : vec4<f32>,
+    @location(7) m3   : vec4<f32>,
+    @location(8) tint : vec4<f32>,
 };
 
 struct VsOut {
@@ -48,6 +49,7 @@ struct VsOut {
     @location(0)       worldPos : vec3<f32>,
     @location(1)       normal   : vec3<f32>,
     @location(2)       uv       : vec2<f32>,
+    @location(3)       tint     : vec4<f32>,
 };
 
 // normalMatrix returns transpose(inverse(m)), the matrix that transforms normals
@@ -71,6 +73,7 @@ fn vs_main(in : VsIn) -> VsOut {
     out.worldPos = world.xyz;
     out.normal = normalize(nm * in.normal);
     out.uv = in.uv;
+    out.tint = in.tint;
     out.clip = frame.proj * frame.view * world;
     return out;
 }
@@ -123,7 +126,9 @@ fn shade(N : vec3<f32>, V : vec3<f32>, L : vec3<f32>, radiance : vec3<f32>,
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-    let albedo = material.baseColor.rgb;
+    // Per-instance tint multiplies the material albedo (and alpha); default tint
+    // is opaque white, leaving the material unchanged.
+    let albedo = material.baseColor.rgb * in.tint.rgb;
     let metallic = clamp(material.mr.x, 0.0, 1.0);
     let roughness = clamp(material.mr.y, 0.04, 1.0);
 
@@ -160,12 +165,16 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     }
 
     let ambient = frame.ambient.rgb * albedo;
-    var color = ambient + Lo + material.emissive.rgb;
+    var color = ambient + Lo + material.emissive.rgb * in.tint.rgb;
 
     // Reinhard tonemap maps HDR radiance into [0,1] linear. The sRGB swapchain
     // format applies the display gamma encode on write, so the shader must NOT
     // gamma-correct here (doing both washes the image out).
     color = color / (color + vec3<f32>(1.0));
 
-    return vec4<f32>(color, material.baseColor.a);
+    // Output premultiplied alpha: rgb is scaled by the final alpha so the
+    // transparent pipeline's (ONE, ONE_MINUS_SRC_ALPHA) blend is correct. Opaque
+    // draws have alpha 1, so this is a no-op for them.
+    let alpha = material.baseColor.a * in.tint.a;
+    return vec4<f32>(color * alpha, alpha);
 }

@@ -55,6 +55,43 @@ func (c *Camera3D) Projection() m.Mat4 {
 	return m.Perspective(m.DegToRad(fov), aspect, near, far)
 }
 
+// ScreenToRay unprojects a window pixel (px,py, origin at the top-left, y down)
+// into a world-space ray. vw,vh are the viewport size in the same pixel units. It
+// returns the ray origin on the near plane and a normalized direction pointing
+// into the scene. Pure math (no GPU), so it is unit-testable.
+//
+// The aspect ratio used is the camera's current aspect (maintained by the resize
+// handler), not vw/vh — they may differ if the caller passes window vs.
+// framebuffer units, but the NDC mapping only needs vw/vh as the pixel extents.
+func (c *Camera3D) ScreenToRay(px, py float64, vw, vh int) (origin, dir m.Vec3) {
+	if vw <= 0 || vh <= 0 {
+		return c.Position, m.Vec3{Z: -1}
+	}
+	ndcX := float32(px/float64(vw)*2 - 1)
+	ndcY := float32(1 - py/float64(vh)*2) // flip: screen y is down, NDC y is up
+
+	vp := c.Projection().Mul(c.View())
+	inv, ok := vp.Inverse()
+	if !ok {
+		return c.Position, m.Vec3{Z: -1}
+	}
+	// WebGPU clip depth: near = 0, far = 1.
+	near := unproject(inv, ndcX, ndcY, 0)
+	far := unproject(inv, ndcX, ndcY, 1)
+	return near, far.Sub(near).Normalize()
+}
+
+// unproject maps an NDC point (x,y,z, w=1) back to world space through the
+// inverse view-projection, applying the perspective divide.
+func unproject(invVP m.Mat4, x, y, z float32) m.Vec3 {
+	p := invVP.MulVec4(m.Vec4{X: x, Y: y, Z: z, W: 1})
+	if p.W == 0 {
+		return p.XYZ()
+	}
+	inv := 1 / p.W
+	return m.Vec3{X: p.X * inv, Y: p.Y * inv, Z: p.Z * inv}
+}
+
 // Orbit positions the camera on a sphere around center at the given distance,
 // looking at center. yaw rotates around the world Y axis (radians, 0 looks
 // down -Z toward center from +Z), pitch tilts up/down (radians, clamped to just

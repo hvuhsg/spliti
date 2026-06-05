@@ -16,8 +16,11 @@ func TestStructStrides(t *testing.T) {
 	if got := unsafe.Sizeof(pointLightGPU{}); got != pointLightStride {
 		t.Errorf("pointLightGPU size = %d, want %d", got, pointLightStride)
 	}
-	if got := unsafe.Sizeof(m.Mat4{}); got != instanceStride {
-		t.Errorf("Mat4 size = %d, want %d", got, instanceStride)
+	if got := unsafe.Sizeof(instanceData{}); got != instanceStride {
+		t.Errorf("instanceData size = %d, want %d", got, instanceStride)
+	}
+	if got := unsafe.Sizeof(m.Mat4{}); got != 64 {
+		t.Errorf("Mat4 size = %d, want 64", got)
 	}
 	if frameUBOBytes%16 != 0 {
 		t.Errorf("frame UBO size %d not 16-byte aligned", frameUBOBytes)
@@ -69,7 +72,7 @@ func TestPackMeshInstancesGroups(t *testing.T) {
 
 func TestPackMeshInstancesReusesSlices(t *testing.T) {
 	items := []renderItem{{mesh: "a", material: "x", model: m.Identity4()}}
-	scratch := make([]m.Mat4, 0, 8)
+	scratch := make([]instanceData, 0, 8)
 	batches := make([]meshBatch, 0, 8)
 	gotS, gotB := packMeshInstances(items, scratch[:0], batches[:0])
 	if &gotS[0] != &scratch[:1][0] {

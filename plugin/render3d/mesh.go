@@ -16,11 +16,14 @@ type Mesh struct {
 }
 
 // meshGPU is one uploaded mesh: its vertex and index buffers plus the index
-// count to draw.
+// count to draw. The CPU geometry (cpu) is retained so picking can raycast
+// against the original triangles — the renderer itself only needs the buffers,
+// but keeping a compact copy here avoids re-uploading or re-deriving it.
 type meshGPU struct {
 	vbuf       *wgpu.Buffer
 	ibuf       *wgpu.Buffer
 	indexCount uint32
+	cpu        *Mesh
 }
 
 // MeshRegistry maps a string ref to an uploaded GPU mesh. Games populate it
@@ -69,8 +72,23 @@ func (r *MeshRegistry) Load(ref string, mesh *Mesh) error {
 	if old := r.byRef[ref]; old != nil {
 		old.release()
 	}
-	r.byRef[ref] = &meshGPU{vbuf: vbuf, ibuf: ibuf, indexCount: uint32(len(mesh.Indices))}
+	r.byRef[ref] = &meshGPU{
+		vbuf:       vbuf,
+		ibuf:       ibuf,
+		indexCount: uint32(len(mesh.Indices)),
+		cpu:        mesh,
+	}
 	return nil
+}
+
+// CPU returns the retained CPU geometry for ref, or nil if not registered. Used
+// by picking; callers must not mutate the returned mesh.
+func (r *MeshRegistry) CPU(ref string) *Mesh {
+	gm := r.get(ref)
+	if gm == nil {
+		return nil
+	}
+	return gm.cpu
 }
 
 // get returns the uploaded mesh for ref, or nil if not registered.
