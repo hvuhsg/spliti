@@ -9,15 +9,18 @@
 //	KeyboardControl  maps keys to velocity assignments
 //	CollisionEvent   produced by the collision system on overlap
 //
-// Add runtime.Plugin{} to install the three systems (KeyboardSystem,
-// MovementSystem, CollisionSystem) on FixedUpdate. The systems are gated by
-// an optional RunIf predicate so the editor can pause the simulation in Edit
-// mode while still rendering the world.
+// Add runtime.Plugin{} to install keyboard, movement, and collision on
+// FixedUpdate. Collision is the reusable plugin/collision package (Bounds and
+// CollisionEvent are aliases for its Collider and CollisionEvent); runtime just
+// wires it with a Tag resolver. The systems are gated by an optional RunIf
+// predicate so the editor can pause the simulation in Edit mode while still
+// rendering the world.
 package runtime
 
 import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/collision"
 	"github.com/hvuhsg/spliti/plugin/input"
 	"github.com/hvuhsg/spliti/plugin/tui"
 	"github.com/hvuhsg/spliti/schedule"
@@ -32,7 +35,13 @@ type Velocity struct{ DX, DY int }
 
 // Bounds is an AABB collider whose top-left corner sits at the entity's
 // Position. Width/Height are in cells.
-type Bounds struct{ W, H int }
+//
+// It is an alias for collision.Collider: the collision detection itself lives in
+// the reusable plugin/collision package, and runtime just keeps the familiar
+// name (and the editor's "bounds" component) pointing at it. The aliased type
+// also carries optional Layer/Mask filter fields, which scenes that don't set
+// them leave zero — meaning "collide with everything", exactly as before.
+type Bounds = collision.Collider
 
 // Tag attaches a human-readable name to an entity. Used by the editor's
 // hierarchy panel and by collision events to identify participants without
@@ -94,11 +103,11 @@ type KeyboardControl struct {
 // CollisionEvent is sent once per overlapping pair per FixedUpdate tick.
 // A and B are the participating entities; ATag and BTag are their Tag.Name
 // values (empty string if no Tag component). The pair (A,B) is reported in
-// stable entity-id order so listeners don't see (a,b) and (b,a) separately.
-type CollisionEvent struct {
-	A, B       ecs.Entity
-	ATag, BTag string
-}
+// stable iteration order so listeners don't see (a,b) and (b,a) separately.
+//
+// It is an alias for collision.CollisionEvent, so listeners can read the event
+// from either package interchangeably.
+type CollisionEvent = collision.CollisionEvent
 
 // Plugin installs Keyboard → Movement → Collision on FixedUpdate. The runIf
 // predicate, if non-nil, gates all three systems uniformly so the editor can
@@ -114,7 +123,12 @@ type Plugin struct {
 func (p Plugin) Build(a *app.App) {
 	keyboardSys := app.System(KeyboardSystem).Label("__spliti_runtime_keyboard")
 	movementSys := app.System(MovementSystem).Label("__spliti_runtime_movement").After("__spliti_runtime_keyboard")
-	collisionSys := app.System(CollisionSystem).Label("__spliti_runtime_collision").After("__spliti_runtime_movement")
+	// Collision detection is the reusable plugin/collision package; runtime
+	// wires it with a Tag resolver so events carry the entity's Tag.Name, and
+	// keeps the existing label/ordering so the editor's pause gate and tests
+	// are unaffected.
+	collisionSys := app.System(collision.NewSystem(collision.Config{Tag: resolveTag})).
+		Label("__spliti_runtime_collision").After("__spliti_runtime_movement")
 	if p.RunIf != nil {
 		keyboardSys.RunIf(p.RunIf)
 		movementSys.RunIf(p.RunIf)
@@ -190,40 +204,14 @@ func MovementSystem(c *app.Ctx) {
 	})
 }
 
-// CollisionSystem performs an O(n²) AABB pair-test on (Position, Bounds)
-// entities and emits one CollisionEvent per overlap. Entity-id order is
-// preserved for stable pair identity.
-//
-// O(n²) is fine for the editor's expected scene sizes (dozens of entities).
-// Replace with a spatial hash if a project breaks past a few hundred.
-func CollisionSystem(c *app.Ctx) {
-	type body struct {
-		E    ecs.Entity
-		X, Y int
-		W, H int
-		Tag  string
-	}
-	var bodies []body
-	world := c.World()
+// resolveTag returns the entity's Tag.Name, or "" if it has no Tag component.
+// It is handed to collision.NewSystem so CollisionEvent participants keep their
+// human-readable labels without the collision package depending on runtime.Tag.
+func resolveTag(world *ecs.World, e ecs.Entity) string {
 	tagID := ecs.ComponentID[Tag](world)
-	tagMap := generic.NewMap1[Tag](world)
-	app.Query2[tui.Position, Bounds](c, func(e ecs.Entity, p *tui.Position, b *Bounds) {
-		t := ""
-		if world.Has(e, tagID) {
-			t = tagMap.Get(e).Name
-		}
-		bodies = append(bodies, body{E: e, X: p.X, Y: p.Y, W: b.W, H: b.H, Tag: t})
-	})
-	for i := 0; i < len(bodies); i++ {
-		for j := i + 1; j < len(bodies); j++ {
-			a, b := bodies[i], bodies[j]
-			if a.X+a.W <= b.X || b.X+b.W <= a.X {
-				continue
-			}
-			if a.Y+a.H <= b.Y || b.Y+b.H <= a.Y {
-				continue
-			}
-			app.SendEvent(c, CollisionEvent{A: a.E, B: b.E, ATag: a.Tag, BTag: b.Tag})
-		}
+	if world.Has(e, tagID) {
+		tagMap := generic.NewMap1[Tag](world)
+		return tagMap.Get(e).Name
 	}
+	return ""
 }
