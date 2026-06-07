@@ -124,7 +124,9 @@ func buildRxConst(mod sim.Modulation, dec *Decode) image.Image {
 		p := buf[i]
 		drawDot(img, cx+int(real(p)*scale), cy-int(imag(p)*scale), 1, color.RGBA{130, 255, 175, 200})
 	}
-	drawText(img, 10, sz-20, clip("> "+dec.text(), 24), color.RGBA{170, 255, 200, 255}, 2)
+	// Keep the decoded line inside the panel: at text scale 2 it is ~28px tall and
+	// ~14px/char wide, so sit it above the bottom edge and clip to the panel width.
+	drawText(img, 10, sz-32, clip("> "+dec.text(), 15), color.RGBA{170, 255, 200, 255}, 2)
 	return img
 }
 
