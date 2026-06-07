@@ -7,6 +7,8 @@ import (
 	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/plugin/render3d"
+	"github.com/mlange-42/arche/ecs"
+	"github.com/mlange-42/arche/generic"
 )
 
 // Mode is the global interaction mode. Systems consult it instead of fighting
@@ -24,9 +26,11 @@ type UI struct{ Mode Mode }
 func newUI() *UI { return &UI{Mode: ModeExplore} }
 
 // Editor holds the node-graph editor's interaction state. Which graph it edits is
-// the selected device's chain (Editor.target); whether it's shown is UI.Mode.
+// the bound device's chain (Editor.target kind + Editor.targetEnt); whether it's
+// shown is UI.Mode.
 type Editor struct {
-	target Selection // which device's graph is open (SelTx / SelRx)
+	target    Selection  // which kind of device's graph is open (SelTx / SelRx)
+	targetEnt ecs.Entity // the specific device entity whose graph is open
 
 	dragID             int // node being dragged (0 = none)
 	dragOffX, dragOffY float32
@@ -42,10 +46,11 @@ func newEditor() *Editor { return &Editor{redraw: true} }
 
 // editor layout constants, in framebuffer pixels.
 const (
-	edPad = 60 // canvas inset from the screen edge
-	nodeW = 280
-	nodeH = 120
-	portR = 13 // port half-size
+	edPad  = 60 // canvas inset from the screen edge
+	nodeW  = 360
+	nodeH  = 240
+	titleH = 36 // node title-bar height
+	portR  = 17 // port half-size
 )
 
 // rect is an axis-aligned pixel rectangle with a hit test.
@@ -61,7 +66,7 @@ func canvasRect(fbW, fbH int) rect {
 
 // openGraphButtonRect is the "OPEN GRAPH" button inside the device config drawer.
 func openGraphButtonRect(fbW, fbH int) rect {
-	return rect{float32(fbW-configW) + 24, 300, configW - 48, 56}
+	return rect{float32(fbW-configW) + 24, configBtnY, configW - 48, 56}
 }
 
 // node geometry, canvas-local --------------------------------------------------
@@ -71,8 +76,8 @@ func inPortRect(n *Node) rect { return rect{n.X - portR, n.Y + nodeH/2 - portR, 
 func outPortRect(n *Node) rect {
 	return rect{n.X + nodeW - portR, n.Y + nodeH/2 - portR, 2 * portR, 2 * portR}
 }
-func closeRect(n *Node) rect { return rect{n.X + nodeW - 32, n.Y + 8, 24, 24} }
-func cycleRect(n *Node) rect { return rect{n.X + 16, n.Y + nodeH - 42, nodeW - 32, 30} }
+func closeRect(n *Node) rect { return rect{n.X + nodeW - 40, n.Y + 8, 28, 28} }
+func cycleRect(n *Node) rect { return rect{n.X + 18, n.Y + nodeH - 48, nodeW - 36, 36} }
 
 // hasInput/hasOutput give a node's port directions, which depend on the chain
 // kind (a Text node is a source in TX, a sink in RX).
@@ -110,16 +115,22 @@ func toolbarOf(cw, ch float32) toolbar {
 	return toolbar{addText: mk(), addConst: mk(), play: mk(), close: mk()}
 }
 
-// boundGraph resolves the graph (and TX playback, if any) of the open device.
+// boundGraph resolves the graph (and TX playback, if any) of the bound device.
 func boundGraph(c *app.Ctx, ed *Editor) (*Graph, *Play) {
+	if ed.targetEnt.IsZero() {
+		return nil, nil
+	}
 	switch ed.target {
 	case SelTx:
-		if d := txDevice(c); d != nil {
+		mp := generic.NewMap[TxDevice](c.World())
+		if mp.Has(ed.targetEnt) {
+			d := mp.Get(ed.targetEnt)
 			return d.Graph, d.Play
 		}
 	case SelRx:
-		if d := rxDevice(c); d != nil {
-			return d.Graph, nil
+		mp := generic.NewMap[RxDevice](c.World())
+		if mp.Has(ed.targetEnt) {
+			return mp.Get(ed.targetEnt).Graph, nil
 		}
 	}
 	return nil, nil
@@ -158,7 +169,7 @@ func editorSystem(c *app.Ctx) {
 		switch {
 		case ui.Mode == ModeExplore:
 			if ev.Action == glfw.Press && lab.Sel != SelNone && openGraphButtonRect(fbW, fbH).hit(px, py) {
-				ui.Mode, ed.target, ed.editID, ed.redraw = ModeGraph, lab.Sel, 0, true
+				ui.Mode, ed.target, ed.targetEnt, ed.editID, ed.redraw = ModeGraph, lab.Sel, lab.Ent, 0, true
 			}
 		case g == nil:
 			// nothing to edit
@@ -416,10 +427,11 @@ func drawNode(img *image.RGBA, n *Node, gk GraphKind, editing, wiring bool) {
 	case KindReceiver:
 		title, bar = "RECEIVER", color.RGBA{70, 190, 120, 255}
 	}
-	fillRect(img, x, y, nodeW, 30, bar)
-	drawText(img, x+12, y+8, title, color.RGBA{15, 18, 24, 255}, 2)
+	fillRect(img, x, y, nodeW, titleH, bar)
+	drawText(img, x+14, y+11, title, color.RGBA{15, 18, 24, 255}, 2)
 
 	white := color.RGBA{235, 240, 245, 255}
+	bodyMid := y + titleH + (nodeH-titleH)/2 // vertical center of the body area
 	switch n.Kind {
 	case KindText:
 		if gk == GraphTx {
@@ -427,23 +439,31 @@ func drawNode(img *image.RGBA, n *Node, gk GraphKind, editing, wiring bool) {
 			if editing {
 				s += "_"
 			}
-			drawText(img, x+16, y+52, clip(s, 20), white, 2)
+			drawText(img, x+20, bodyMid-8, clip(s, 22), white, 3)
 		} else {
-			drawText(img, x+16, y+46, "decoded:", color.RGBA{150, 200, 170, 255}, 1)
-			drawText(img, x+16, y+62, clip(n.Text, 20), white, 2)
+			drawText(img, x+20, y+titleH+24, "decoded:", color.RGBA{150, 200, 170, 255}, 2)
+			drawText(img, x+20, bodyMid+8, clip(n.Text, 22), white, 3)
 		}
 	case KindConstellation:
-		drawText(img, x+16, y+50, modName(n.Mod), white, 3)
-		drawButton(img, rect{r.x + 16, r.y + nodeH - 42, nodeW - 32, 30}, "MOD >", color.RGBA{90, 70, 30, 255})
+		// The constellation diagram itself — same points the HUD panels draw, so the
+		// node matches the receiver's on-screen constellation. The MOD button below
+		// names the scheme and cycles it.
+		cb := cycleRect(n)
+		cx := x + nodeW/2
+		boxTop, boxBot := y+titleH+10, int(cb.y)-10
+		cy := (boxTop + boxBot) / 2
+		half := (boxBot - boxTop) / 2
+		drawConstellationGrid(img, cx, cy, float64(half)*0.92, nodeW/2-24, half, n.Mod)
+		drawButton(img, cb, modName(n.Mod)+"   >", color.RGBA{90, 70, 30, 255})
 	case KindTransmitter:
-		drawText(img, x+16, y+56, "carrier out", color.RGBA{150, 200, 170, 255}, 2)
+		drawText(img, x+20, bodyMid-8, "carrier out", color.RGBA{150, 200, 170, 255}, 3)
 	case KindReceiver:
-		drawText(img, x+16, y+56, "antenna in", color.RGBA{150, 200, 170, 255}, 2)
+		drawText(img, x+20, bodyMid-8, "antenna in", color.RGBA{150, 200, 170, 255}, 3)
 	}
 
 	cb := closeRect(n)
 	fillRect(img, int(cb.x), int(cb.y), int(cb.w), int(cb.h), color.RGBA{120, 40, 40, 255})
-	drawText(img, int(cb.x)+6, int(cb.y)+4, "x", white, 2)
+	drawText(img, int(cb.x)+8, int(cb.y)+7, "x", white, 2)
 
 	port := color.RGBA{210, 220, 230, 255}
 	if hasInput(n, gk) {

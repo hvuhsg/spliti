@@ -8,15 +8,41 @@ import (
 
 // Decode is the receiver's running demodulator: it turns the stream of received
 // (noisy) symbols back into bits and characters. It rebuilds the message once per
-// loop, so at low SNR you watch wrong decisions become wrong characters.
+// loop, so at low SNR you watch wrong decisions become wrong characters. It also
+// keeps the received constellation scatter (the noisy samples the receiver saw),
+// since that is a property of the receiver — sampled from the wave — not of any
+// transmitter.
 type Decode struct {
 	building string // text decoded so far this loop (the live readout)
 	done     string // last fully decoded loop
 	bits     []int
 	lastIdx  int
+
+	rx       [rxBufLen]complex128 // received-constellation scatter ring buffer
+	rxHead   int
+	rxFilled int
 }
 
 func newDecode() *Decode { return &Decode{lastIdx: -1} }
+
+// pushRx records one received constellation sample (the wave at the antenna).
+func (d *Decode) pushRx(v complex128) {
+	d.rx[d.rxHead] = v
+	d.rxHead = (d.rxHead + 1) % rxBufLen
+	if d.rxFilled < rxBufLen {
+		d.rxFilled++
+	}
+}
+
+// rxPoints copies the received scatter into dst (newest last); returns the count.
+func (d *Decode) rxPoints(dst []complex128) int {
+	n := d.rxFilled
+	start := (d.rxHead - n + rxBufLen) % rxBufLen
+	for i := 0; i < n; i++ {
+		dst[i] = d.rx[(start+i)%rxBufLen]
+	}
+	return n
+}
 
 // step consumes the symbol arriving at index arrIdx (0…nsym−1). It decodes one
 // symbol per index change and resets the accumulator when the loop wraps.

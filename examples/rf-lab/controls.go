@@ -9,6 +9,7 @@ import (
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
 	"github.com/mlange-42/arche/ecs"
+	"github.com/mlange-42/arche/generic"
 )
 
 // CamCtl is a fly camera plus the input state for looking and dragging markers.
@@ -71,6 +72,7 @@ func controlsSystem(c *app.Ctx) {
 	handleButtons(c, ctl, lab)
 	handleLook(c, ctl)
 	handleConfigKeys(c, lab)
+	handleDeviceKeys(c, lab)
 
 	// Camera movement (held keys), relative to view direction but kept horizontal.
 	fwd := ctl.forward()
@@ -107,9 +109,11 @@ func controlsSystem(c *app.Ctx) {
 }
 
 // handleButtons resolves clicks: right button toggles mouse-look; left-press
-// raycasts to select a marker (or deselect on empty ground) and begins a drag.
+// raycasts to select whichever marker was hit (or deselect on empty ground) and
+// begins a drag.
 func handleButtons(c *app.Ctx, ctl *CamCtl, lab *Lab) {
-	txE, rxE := markerEntities(c)
+	txMap := generic.NewMap[txTag](c.World())
+	rxMap := generic.NewMap[rxTag](c.World())
 	for _, ev := range app.ReadEvents[render3d.MouseButtonEvent](c) {
 		switch ev.Button {
 		case glfw.MouseButtonRight:
@@ -123,25 +127,61 @@ func handleButtons(c *app.Ctx, ctl *CamCtl, lab *Lab) {
 			origin, dir := render3d.ScreenToRay(c, ev.X, ev.Y)
 			hit, ok := render3d.Raycast(c, origin, dir)
 			switch {
-			case ok && hit.Entity == txE:
-				lab.Sel = SelTx
-				ctl.dragging = true
-			case ok && hit.Entity == rxE:
-				lab.Sel = SelRx
-				ctl.dragging = true
+			case ok && txMap.Has(hit.Entity):
+				lab.Sel, lab.Ent, ctl.dragging = SelTx, hit.Entity, true
+			case ok && rxMap.Has(hit.Entity):
+				lab.Sel, lab.Ent, ctl.dragging = SelRx, hit.Entity, true
 			default:
-				lab.Sel = SelNone
-				ctl.dragging = false
+				lab.Sel, lab.Ent, ctl.dragging = SelNone, ecs.Entity{}, false
 			}
 		}
 	}
 }
 
-// markerEntities returns the transmitter and receiver head entities.
-func markerEntities(c *app.Ctx) (tx, rx ecs.Entity) {
-	app.Query1[txTag](c, func(e ecs.Entity, _ *txTag) { tx = e })
-	app.Query1[rxTag](c, func(e ecs.Entity, _ *rxTag) { rx = e })
-	return tx, rx
+// handleDeviceKeys adds and removes devices: T spawns a transmitter, R spawns a
+// receiver (the new one is selected), and Delete/Backspace removes the current
+// selection along with its mast.
+func handleDeviceKeys(c *app.Ctx, lab *Lab) {
+	for _, ev := range app.ReadEvents[render3d.KeyEvent](c) {
+		if ev.Action != glfw.Press {
+			continue
+		}
+		switch ev.Key {
+		case glfw.KeyT:
+			spawnTx(c.Commands(), spawnSpot[txTag](c, -30), lab, true)
+		case glfw.KeyR:
+			spawnRx(c.Commands(), spawnSpot[rxTag](c, 30), lab, true)
+		case glfw.KeyDelete, glfw.KeyBackspace:
+			removeSelected(c, lab)
+		}
+	}
+}
+
+// spawnSpot picks a ground position for a newly added marker of tag T: fixed in
+// X, staggered in Z by how many of that tag already exist so adds don't stack.
+func spawnSpot[T any](c *app.Ctx, x float32) m.Vec3 {
+	n := 0
+	app.Query1[T](c, func(ecs.Entity, *T) { n++ })
+	z := clamp(float32(n)*12-24, -planeHalf, planeHalf)
+	return m.Vec3{X: x, Y: markerHeight, Z: z}
+}
+
+// removeSelected despawns the selected marker and its mast, then clears the
+// selection.
+func removeSelected(c *app.Ctx, lab *Lab) {
+	if lab.Sel == SelNone || lab.Ent.IsZero() {
+		return
+	}
+	ent := lab.Ent
+	cmd := c.Commands()
+	// Despawn the mast(s) parented to this marker so they don't dangle.
+	app.Query1[render3d.Parent](c, func(e ecs.Entity, p *render3d.Parent) {
+		if p.Entity == ent {
+			cmd.Despawn(e)
+		}
+	})
+	cmd.Despawn(ent)
+	lab.Sel, lab.Ent = SelNone, ecs.Entity{}
 }
 
 // handleLook accumulates yaw/pitch from cursor motion while the right button is
@@ -170,8 +210,8 @@ func handleConfigKeys(c *app.Ctx, lab *Lab) {
 	if lab.Sel == SelNone {
 		return
 	}
-	txd := txDevice(c)
-	rxd := rxDevice(c)
+	txd := selectedTx(c, lab)
+	rxd := selectedRx(c, lab)
 	for _, ev := range app.ReadEvents[render3d.KeyEvent](c) {
 		if ev.Action != glfw.Press && ev.Action != glfw.Repeat {
 			continue
@@ -196,22 +236,27 @@ func handleConfigKeys(c *app.Ctx, lab *Lab) {
 				rxd.GainDBi += 1
 			case glfw.KeyDown:
 				rxd.GainDBi -= 1
-			case glfw.KeyRight:
+			case glfw.KeyRight: // tune up (shorter wavelength)
+				rxd.TuneHz += 2e6
+			case glfw.KeyLeft: // tune down (longer wavelength)
+				rxd.TuneHz -= 2e6
+			case glfw.KeyRightBracket: // ] louder noise floor
 				rxd.NoiseFigDB += 0.5
-			case glfw.KeyLeft:
+			case glfw.KeyLeftBracket: // [ quieter noise floor
 				rxd.NoiseFigDB -= 0.5
 			}
 			rxd.GainDBi = clampf(rxd.GainDBi, -10, 30)
+			rxd.TuneHz = clampf(rxd.TuneHz, 10e6, 45e6) // same span as the transmitters
 			rxd.NoiseFigDB = clampf(rxd.NoiseFigDB, 0, 20)
 		}
 	}
 }
 
 // dragMarker moves the selected marker to where the cursor ray meets the marker-
-// height plane, clamped to the ground, updating both its transform and Lab.
+// height plane, clamped to the ground, by writing its transform.
 func dragMarker(c *app.Ctx, lab *Lab) {
 	win := render3d.Window(c)
-	if win == nil {
+	if win == nil || lab.Ent.IsZero() {
 		return
 	}
 	x, y := win.GetCursorPos()
@@ -224,30 +269,20 @@ func dragMarker(c *app.Ctx, lab *Lab) {
 	hit.Z = clamp(hit.Z, -planeHalf, planeHalf)
 	hit.Y = markerHeight
 
-	if lab.Sel == SelTx {
-		lab.TxPos = hit
-		setMarkerPos[txTag](c, hit)
-	} else {
-		lab.RxPos = hit
-		setMarkerPos[rxTag](c, hit)
+	tmap := generic.NewMap[render3d.Transform3D](c.World())
+	if tmap.Has(lab.Ent) {
+		tmap.Get(lab.Ent).Translation = hit
 	}
 }
 
-// setMarkerPos writes the position into the transform of the entity carrying tag T.
-func setMarkerPos[T any](c *app.Ctx, pos m.Vec3) {
-	app.Query2[render3d.Transform3D, T](c, func(_ ecs.Entity, t *render3d.Transform3D, _ *T) {
-		t.Translation = pos
-	})
-}
-
-// applyHighlight swaps each marker's material to its "selected" variant when it is
-// the current selection, and back to the base material otherwise.
+// applyHighlight swaps each marker's material to its "selected" variant for the
+// one selected entity, and back to the base material for every other marker.
 func applyHighlight(c *app.Ctx, lab *Lab) {
-	app.Query2[render3d.MaterialRef, txTag](c, func(_ ecs.Entity, mr *render3d.MaterialRef, _ *txTag) {
-		mr.Material = pick(lab.Sel == SelTx, "tx_sel", "tx")
+	app.Query2[render3d.MaterialRef, txTag](c, func(e ecs.Entity, mr *render3d.MaterialRef, _ *txTag) {
+		mr.Material = pick(lab.Sel == SelTx && e == lab.Ent, "tx_sel", "tx")
 	})
-	app.Query2[render3d.MaterialRef, rxTag](c, func(_ ecs.Entity, mr *render3d.MaterialRef, _ *rxTag) {
-		mr.Material = pick(lab.Sel == SelRx, "rx_sel", "rx")
+	app.Query2[render3d.MaterialRef, rxTag](c, func(e ecs.Entity, mr *render3d.MaterialRef, _ *rxTag) {
+		mr.Material = pick(lab.Sel == SelRx && e == lab.Ent, "rx_sel", "rx")
 	})
 }
 

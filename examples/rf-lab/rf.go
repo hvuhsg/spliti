@@ -23,22 +23,27 @@ func freeSpacePowerW(powerW, freqHz, gainTx, gainRx, distM float64) float64 {
 	return powerW * gainTx * gainRx * fspl * fspl
 }
 
-// rfSystem recomputes the link budget each frame from the current Lab state and
-// stores it in Link: received power (via Friis), Tx–Rx distance, and the SNR
-// against the receiver's thermal noise floor.
+// rfSystem recomputes the link budget each frame for the focused transmitter →
+// receiver pair (the selected device and its first counterpart) and stores it in
+// Link: received power (via Friis), Tx–Rx distance, and the SNR against the
+// receiver's thermal noise floor. When either side is missing the link is zeroed.
 func rfSystem(c *app.Ctx) {
 	lab := app.GetResource[Lab](c)
 	link := app.GetResource[Link](c)
-	txd := txDevice(c)
-	rxd := rxDevice(c)
-	if lab == nil || link == nil || txd == nil || rxd == nil {
+	if lab == nil || link == nil {
 		return
 	}
-	d := float64(lab.RxPos.Sub(lab.TxPos).Length())
+	txd, txPos, okt := focusTx(c, lab)
+	rxd, rxPos, okr := focusRx(c, lab)
+	if !okt || !okr {
+		link.DistM, link.PowerW, link.SNRdB = 0, 0, 0
+		return
+	}
+	d := float64(rxPos.Sub(txPos).Length())
 	grx := math.Pow(10, rxd.GainDBi/10) // dBi → linear; Tx assumed isotropic
 	pr := freeSpacePowerW(txd.PowerW, txd.FreqHz, 1, grx, d)
 
 	link.DistM = d
 	link.PowerW = pr
-	link.SNRdB = sim.SNRdB(pr, rxd.rx(lab.RxPos))
+	link.SNRdB = sim.SNRdB(pr, rxd.rx(rxPos))
 }

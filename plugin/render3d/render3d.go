@@ -162,6 +162,11 @@ type GPU struct {
 	curEncoder  *wgpu.CommandEncoder
 	curPass     *wgpu.RenderPassEncoder
 	frameActive bool
+
+	// captureSink, when non-nil, requests that the next presented frame be read
+	// back and handed to it. Set via CaptureFrame and cleared by presentSystem once
+	// the frame is delivered.
+	captureSink FrameSink
 }
 
 // Build implements app.Plugin.
@@ -213,7 +218,10 @@ func (p Plugin) Build(a *app.App) {
 		present = wgpu.PresentModeImmediate
 	}
 	config := &wgpu.SurfaceConfiguration{
-		Usage:       wgpu.TextureUsageRenderAttachment,
+		// CopySrc lets presentSystem read the rendered frame back for screenshots
+		// (see RequestScreenshot). Surface textures support it on the desktop
+		// backends this plugin targets (Metal/Vulkan/D3D12).
+		Usage:       wgpu.TextureUsageRenderAttachment | wgpu.TextureUsageCopySrc,
 		Format:      pickSurfaceFormat(caps.Formats),
 		Width:       uint32(fbw),
 		Height:      uint32(fbh),

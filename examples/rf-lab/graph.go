@@ -50,11 +50,11 @@ type Graph struct {
 // Transmitter — already wired, so Play works immediately and shows the pattern.
 func newTxGraph() *Graph {
 	g := &Graph{Kind: GraphTx}
-	txt := g.add(KindText, 80, 150)
+	txt := g.add(KindText, 80, 140)
 	txt.Text = "HELLO RF"
-	con := g.add(KindConstellation, 460, 150)
+	con := g.add(KindConstellation, 560, 140)
 	con.Mod = sim.QPSK
-	tx := g.add(KindTransmitter, 840, 150)
+	tx := g.add(KindTransmitter, 1040, 140)
 	g.connect(txt.ID, con.ID)
 	g.connect(con.ID, tx.ID)
 	return g
@@ -64,10 +64,10 @@ func newTxGraph() *Graph {
 // where the Text node is a sink that displays the decoded message.
 func newRxGraph() *Graph {
 	g := &Graph{Kind: GraphRx}
-	rx := g.add(KindReceiver, 80, 150)
-	con := g.add(KindConstellation, 460, 150)
+	rx := g.add(KindReceiver, 80, 140)
+	con := g.add(KindConstellation, 560, 140)
 	con.Mod = sim.QPSK
-	txt := g.add(KindText, 840, 150)
+	txt := g.add(KindText, 1040, 140)
 	txt.Text = ""
 	g.connect(rx.ID, con.ID)
 	g.connect(con.ID, txt.ID)

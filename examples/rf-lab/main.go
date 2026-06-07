@@ -1,19 +1,26 @@
 // Command rf-lab is an interactive RF learning playground built on
-// plugin/render3d. A ground plane carries a transmitter and a receiver, each of
-// which you can click to select and drag to move. When one is selected a config
-// panel pops up on the right: for the transmitter the arrow keys change its power
-// and frequency, for the receiver they change its antenna gain and noise figure.
-// A readout in the top-left shows the live link budget — received power (dBm),
-// distance, and SNR — computed from the free-space (Friis) path-loss model, so
-// you can watch how power, frequency, and distance trade off.
+// plugin/render3d. A ground plane carries transmitters and receivers, each of
+// which you can click to select and drag to move. You can add as many of either
+// as you like (T / R), so you can watch several sources interfere on the ground.
+// When one is selected a config panel pops up on the right: for a transmitter the
+// arrow keys change its power and frequency, for a receiver they tune its listening
+// frequency and antenna gain ([ / ] change its noise figure). A receiver only hears
+// transmitters within its bandwidth of the frequency it is tuned to. A readout in
+// the top-left shows the live link
+// budget — received power (dBm), distance, and SNR — for the focused pair,
+// computed from the free-space (Friis) path-loss model, so you can watch how
+// power, frequency, and distance trade off.
 //
 // Controls:
 //
 //	W/A/S/D     move the camera (horizontal), Q/E down/up
 //	right-drag  look around
-//	left-click  select the transmitter or receiver (click empty ground to deselect)
+//	left-click  select a transmitter or receiver (click empty ground to deselect)
 //	left-drag   move the selected marker along the ground
 //	↑/↓ ←/→     adjust the selected marker's parameters (see the config panel)
+//	[ / ]       receiver noise figure
+//	T / R       add a transmitter / receiver (the new one is selected)
+//	Del / ⌫     remove the selected transmitter or receiver
 //	Esc         quit
 //
 // Requires a GPU window, cgo, and a C toolchain:
@@ -22,6 +29,7 @@
 package main
 
 import (
+	"os"
 	"runtime"
 
 	"github.com/go-gl/glfw/v3.3/glfw"
@@ -30,6 +38,7 @@ import (
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
 	"github.com/hvuhsg/spliti/schedule"
+	"github.com/mlange-42/arche/ecs"
 )
 
 // The GLFW window must live on the main OS thread.
@@ -37,15 +46,17 @@ func init() { runtime.LockOSThread() }
 
 // --- components ---
 
-// txTag marks the single transmitter marker entity (the pickable head sphere).
+// txTag marks a transmitter marker entity (the pickable head sphere). There may
+// be any number of them.
 type txTag struct{}
 
-// rxTag marks the single receiver marker entity (the pickable head sphere).
+// rxTag marks a receiver marker entity (the pickable head sphere). There may be
+// any number of them.
 type rxTag struct{}
 
 // --- selection ---
 
-// Selection identifies which marker, if any, is currently selected.
+// Selection identifies the kind of marker, if any, that is currently selected.
 type Selection int
 
 const (
@@ -56,14 +67,13 @@ const (
 
 // --- resources ---
 
-// Lab holds the scene-level state shared across devices: the transmitter and
-// receiver positions and the current selection. Per-device radio settings and
-// signal chains live on the TxDevice / RxDevice components (see device.go), so
-// each device can differ. The marker transforms follow these positions.
+// Lab holds the scene-level selection: which kind of marker is selected and which
+// specific entity it is. Per-device radio settings and signal chains live on the
+// TxDevice / RxDevice components (see device.go) and per-device positions live in
+// each marker's Transform3D, so every device is independent.
 type Lab struct {
-	TxPos m.Vec3
-	RxPos m.Vec3
-	Sel   Selection
+	Sel Selection  // kind of the current selection (SelNone when nothing is selected)
+	Ent ecs.Entity // the selected marker entity (valid when Sel != SelNone)
 }
 
 // Link holds the per-frame link budget computed by rfSystem from the Lab state.
@@ -76,13 +86,7 @@ type Link struct {
 const markerHeight = 2.5 // antenna head height above the ground, meters
 const planeHalf = 78.0   // drag clamp half-extent (the ground is 160 wide)
 
-func newLab() *Lab {
-	return &Lab{
-		TxPos: m.Vec3{X: -30, Y: markerHeight, Z: 0},
-		RxPos: m.Vec3{X: 30, Y: markerHeight, Z: 0},
-		Sel:   SelNone,
-	}
-}
+func newLab() *Lab { return &Lab{Sel: SelNone} }
 
 func main() {
 	a := app.New()
@@ -105,6 +109,12 @@ func main() {
 	app.InsertResource(a, &HUD{})
 	app.InsertResource(a, newUI())
 	app.InsertResource(a, newEditor())
+
+	if dir, ok := captureEnabled(); ok {
+		must(os.MkdirAll(dir, 0o755))
+		app.InsertResource(a, newCapturePlan(dir))
+		a.AddSystems(schedule.Update, captureSystem) // drives the scripted screenshot run
+	}
 
 	a.AddSystems(schedule.Startup, setup)
 	a.AddSystems(schedule.Update, editorSystem) // before controls: owns input in graph mode

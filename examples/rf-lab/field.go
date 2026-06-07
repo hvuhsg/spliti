@@ -7,6 +7,7 @@ import (
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/examples/radiosim/sim"
 	"github.com/hvuhsg/spliti/plugin/render3d"
+	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
 	"github.com/mlange-42/arche/ecs"
 )
@@ -54,15 +55,22 @@ func (f *Field) ordered(dst []float64) {
 	}
 }
 
+// txSrc is one transmitter's contribution to the field for this frame.
+type txSrc struct {
+	pos        m.Vec3
+	freq       float64
+	powerW     float64
+	play       *Play
+	cr, cg, cb float64 // hue for this carrier, so its wavefronts are recognizable
+}
+
 // fieldSystem advances the wave clock, repaints every ground cell with the
-// instantaneous field Re{(A/r)·e^{j(ωt−kr)}}, and samples the field at the
-// receiver into the oscilloscope buffer. Reflection-free: a single point source.
+// instantaneous field summed over all transmitters (so multiple sources visibly
+// interfere), and samples that same superposed wave at the focused receiver for
+// its oscilloscope trace, constellation scatter, and decoder.
 func fieldSystem(c *app.Ctx) {
 	f := app.GetResource[Field](c)
 	lab := app.GetResource[Lab](c)
-	link := app.GetResource[Link](c)
-	txd := txDevice(c)
-	rxd := rxDevice(c)
 	tm := app.GetResource[splititime.Time](c)
 	if f == nil || lab == nil {
 		return
@@ -71,79 +79,144 @@ func fieldSystem(c *app.Ctx) {
 		f.T += tm.Delta().Seconds()
 	}
 
-	// Pull the (single, for now) transmitter's settings and message.
-	freq, powerW := 24e6, 1e-9
-	var play *Play
-	if txd != nil {
-		freq, powerW, play = txd.FreqHz, txd.PowerW, txd.Play
-	}
-
-	lambda := sim.SpeedOfLight / freq // real wavelength (VHF → metres)
-	k := 2 * math.Pi / lambda
 	ct := visualSpeed * f.T // phase reference; wavefronts move at visualSpeed
-	tx := lab.TxPos
 
-	// Ground cells show the wave shape at a fixed reference amplitude, so the
-	// pattern stays visible regardless of transmit power. When a message is
-	// playing, each cell carries the symbol that left the transmitter at time
-	// (t − r/visualSpeed): the data ripples outward as rings of modulation.
-	app.Query2[render3d.InstanceColor, fieldCell](c,
-		func(_ ecs.Entity, col *render3d.InstanceColor, fc *fieldCell) {
-			r := math.Hypot(float64(fc.X-tx.X), float64(fc.Z-tx.Z))
-			if r < rMin {
-				r = rMin
-			}
-			th := k * (ct - r)
-			sym := modSymbol(play, f.T-r/visualSpeed)
-			// Re{sym · e^{jθ}} = symRe·cosθ − symIm·sinθ.
-			modReal := real(sym)*math.Cos(th) - imag(sym)*math.Sin(th)
-			r8, g8, b8 := bipolar(math.Tanh(fieldGain * (refAmp / r) * modReal))
-			*col = render3d.InstanceColor{R: r8, G: g8, B: b8, A: 1}
+	// Gather every transmitter's source parameters for the ground superposition.
+	var srcs []txSrc
+	app.Query3[render3d.Transform3D, TxDevice, txTag](c,
+		func(_ ecs.Entity, t *render3d.Transform3D, d *TxDevice, _ *txTag) {
+			cr, cg, cb := freqColor(d.FreqHz)
+			srcs = append(srcs, txSrc{pos: t.Translation, freq: d.FreqHz, powerW: d.PowerW, play: d.Play, cr: cr, cg: cg, cb: cb})
 		})
 
-	// The receiver samples the *real* field (amplitude ∝ √power, with 1/r loss)
-	// plus thermal noise, so the oscilloscope shows the true signal-to-noise ratio.
-	r := math.Hypot(float64(lab.RxPos.X-tx.X), float64(lab.RxPos.Z-tx.Z))
-	if r < rMin {
-		r = rMin
-	}
-	thRx := k * (ct - r)
-	arriving := modSymbol(play, f.T-r/visualSpeed)
-	signal := math.Sqrt(powerW) / r * (real(arriving)*math.Cos(thRx) - imag(arriving)*math.Sin(thRx))
-	// Noise std, in the same units as the sampled field, calibrated so the scope's
-	// visible signal-to-noise matches the link budget's SNR (= Pr/NoiseFloor):
-	// σ = (4π/λ)·√(N/2). See SNRdB in the HUD.
-	noiseStd := 0.0
-	if rxd != nil {
-		noiseStd = (4 * math.Pi / lambda) * math.Sqrt(rxd.rx(lab.RxPos).NoiseFloorW()/2)
-	}
-	f.push(signal + rand.NormFloat64()*noiseStd)
-
-	// While a message is transmitting: feed the received constellation scatter and
-	// run the receiver's decoder.
-	if play != nil && play.Playing && len(play.Symbols) > 0 {
-		play.CurTx = play.symIndex(f.T)
-		snrLin := math.Inf(1)
-		if link != nil {
-			snrLin = math.Pow(10, link.SNRdB/10)
-		}
-		sigma := 0.0
-		if snrLin > 0 && !math.IsInf(snrLin, 1) {
-			sigma = math.Sqrt(1 / (2 * snrLin))
-		}
-		recv := arriving + complex(rand.NormFloat64()*sigma, rand.NormFloat64()*sigma)
-		play.pushRx(recv)
-
-		// Receiver decode: sample one symbol per arriving index, decode with the RX
-		// chain's modulation, and write the recovered text into its sink node.
-		if rxd != nil && rxd.Decode != nil {
-			te := f.T - r/visualSpeed
-			if te >= 0 {
-				arrIdx := int(te*play.SymbolRate) % len(play.Symbols)
-				rxd.Decode.step(arrIdx, recv, rxGraphMod(rxd.Graph))
-				if sink := textSink(rxd.Graph); sink != nil {
-					sink.Text = rxd.Decode.text()
+	// Ground cells show the wave shape at a fixed reference amplitude, so the pattern
+	// stays visible regardless of transmit power. Each transmitter's field is summed
+	// into its own hue (keyed to its carrier), so same-frequency sources interfere
+	// within a shared color while different frequencies show as different colors that
+	// mix where they cross. When a message is playing, each cell carries the symbol
+	// that left a transmitter at time (t − r/visualSpeed).
+	const ambient = 0.04
+	app.Query2[render3d.InstanceColor, fieldCell](c,
+		func(_ ecs.Entity, col *render3d.InstanceColor, fc *fieldCell) {
+			var cr, cg, cb float64
+			for _, s := range srcs {
+				r := math.Hypot(float64(fc.X-s.pos.X), float64(fc.Z-s.pos.Z))
+				if r < rMin {
+					r = rMin
 				}
+				k := 2 * math.Pi * s.freq / sim.SpeedOfLight
+				th := k * (ct - r)
+				sym := modSymbol(s.play, f.T-r/visualSpeed)
+				// Re{sym · e^{jθ}} = symRe·cosθ − symIm·sinθ, tinted by the source's hue.
+				v := (refAmp / r) * (real(sym)*math.Cos(th) - imag(sym)*math.Sin(th))
+				cr += s.cr * v
+				cg += s.cg * v
+				cb += s.cb * v
+			}
+			// Wave crests light up in the source hue; troughs (negative) fall to the
+			// dark ambient floor. Each channel is compressed independently into [0,1].
+			*col = render3d.InstanceColor{
+				R: float32(ambient + math.Max(0, math.Tanh(fieldGain*cr))),
+				G: float32(ambient + math.Max(0, math.Tanh(fieldGain*cg))),
+				B: float32(ambient + math.Max(0, math.Tanh(fieldGain*cb))),
+				A: 1,
+			}
+		})
+
+	// Light the "current symbol" indicator on every transmitting source, so a
+	// selected transmitter's ideal-constellation panel can show what it is sending.
+	for _, s := range srcs {
+		if s.play != nil && s.play.Playing && len(s.play.Symbols) > 0 {
+			s.play.CurTx = s.play.symIndex(f.T)
+		}
+	}
+
+	// Everything below samples the *wave* at the focused receiver — the actual
+	// superposition of every transmitter — rather than any single transmitter.
+	rxd, rxPos, okr := focusRx(c, lab)
+	if !okr {
+		return
+	}
+	grx := math.Pow(10, rxd.GainDBi/10) // dBi → linear
+
+	// A real receiver is tuned to one carrier and its front-end filter rejects
+	// everything outside a bandwidth around that carrier. So a transmitter on a
+	// *different* frequency is filtered out and leaves the link untouched; only a
+	// transmitter on the *same* frequency (within the receiver's bandwidth) interferes.
+	// The receiver listens on rxd.TuneHz (set in its config panel).
+	tuneFreq := rxd.TuneHz
+	if tuneFreq <= 0 {
+		tuneFreq = 24e6
+	}
+	halfBW := rxd.BandwidthHz / 2
+
+	// Accumulate only what the tuned front-end passes (within tuneFreq ± bandwidth/2):
+	//   - fieldSample: the superposed real (passband) field → the oscilloscope trace.
+	//   - baseband:    the superposed complex symbol, weighted by received amplitude
+	//                  → the constellation decision. Co-channel transmitters blur into
+	//                  each other here (interference); off-channel ones never get in.
+	//   - totalPr:     in-band received power, for the noise/SNR.
+	// The strongest in-band transmitter drives the symbol clock (timing recovery).
+	var fieldSample float64
+	var baseband complex128
+	var ampSum, totalPr float64
+	var clk *Play
+	var clkR, clkAmp float64
+	for _, s := range srcs {
+		if math.Abs(s.freq-tuneFreq) > halfBW {
+			continue // off-channel: rejected by the receiver's filter
+		}
+		r := math.Hypot(float64(rxPos.X-s.pos.X), float64(rxPos.Z-s.pos.Z))
+		if r < rMin {
+			r = rMin
+		}
+		k := 2 * math.Pi * s.freq / sim.SpeedOfLight
+		th := k * (ct - r)
+		sym := modSymbol(s.play, f.T-r/visualSpeed)
+		amp := math.Sqrt(s.powerW) / r // received voltage amplitude (1/r loss)
+		fieldSample += amp * (real(sym)*math.Cos(th) - imag(sym)*math.Sin(th))
+		baseband += complex(amp, 0) * sym
+		ampSum += amp
+		totalPr += freeSpacePowerW(s.powerW, s.freq, 1, grx, r)
+		if s.play != nil && s.play.Playing && len(s.play.Symbols) > 0 && amp > clkAmp {
+			clk, clkR, clkAmp = s.play, r, amp
+		}
+	}
+
+	// Oscilloscope: the real field plus thermal noise, so the trace shows the true
+	// signal-to-noise ratio. σ = (4π/λ)·√(N/2) converts the noise floor into field
+	// units (λ of the tuned carrier; exact for a single transmitter).
+	noiseFloorW := rxd.rx(rxPos).NoiseFloorW()
+	noiseStd := (4 * math.Pi * tuneFreq / sim.SpeedOfLight) * math.Sqrt(noiseFloorW/2)
+	f.push(fieldSample + rand.NormFloat64()*noiseStd)
+
+	// Constellation decision: the amplitude-weighted average of the arriving symbols
+	// (so one source lands on its ideal point, several land between theirs) plus
+	// noise sized by the total received SNR.
+	if rxd.Decode == nil {
+		return
+	}
+	var point complex128
+	if ampSum > 0 {
+		point = baseband / complex(ampSum, 0)
+	}
+	sigma := 0.0
+	if totalPr > 0 && noiseFloorW > 0 {
+		sigma = math.Sqrt(noiseFloorW / (2 * totalPr))
+	}
+	recv := point + complex(rand.NormFloat64()*sigma, rand.NormFloat64()*sigma)
+	rxd.Decode.pushRx(recv)
+
+	// Decode only while a transmitter is actually sending; the strongest one drives
+	// the symbol clock. The recovered symbol comes from the wave, demodulated with
+	// the receiver's own chosen constellation, and is written into its sink node.
+	if clk != nil {
+		te := f.T - clkR/visualSpeed
+		if te >= 0 {
+			arrIdx := int(te*clk.SymbolRate) % len(clk.Symbols)
+			rxd.Decode.step(arrIdx, recv, rxGraphMod(rxd.Graph))
+			if sink := textSink(rxd.Graph); sink != nil {
+				sink.Text = rxd.Decode.text()
 			}
 		}
 	}
@@ -158,14 +231,32 @@ func modSymbol(play *Play, te float64) complex128 {
 	return play.symbolAt(te)
 }
 
-// bipolar maps a signed, normalized field value to a diverging color ramp:
-// positive crests warm (orange), negative troughs cool (blue), zero near-black.
-func bipolar(v float64) (r, g, b float32) {
-	const ambient = 0.04
-	pos := math.Max(v, 0)
-	neg := math.Max(-v, 0)
-	r = float32(ambient + pos*0.95)
-	g = float32(ambient + pos*0.42 + neg*0.42)
-	b = float32(ambient + neg*0.95)
-	return r, g, b
+// freqColor maps a carrier frequency to a distinct hue — red at the low end of the
+// tunable band through to magenta at the high end — so each transmitter's
+// wavefronts stay recognizable on the ground even where they overlap.
+func freqColor(freqHz float64) (r, g, b float64) {
+	t := clampf((freqHz-10e6)/(45e6-10e6), 0, 1) // 10–45 MHz, the transmitter span
+	return hsvToRGB(t*300, 0.9, 1)
+}
+
+// hsvToRGB converts HSV (hue in degrees, sat/val in [0,1]) to RGB in [0,1].
+func hsvToRGB(h, s, v float64) (r, g, b float64) {
+	c := v * s
+	x := c * (1 - math.Abs(math.Mod(h/60, 2)-1))
+	m := v - c
+	switch {
+	case h < 60:
+		r, g, b = c, x, 0
+	case h < 120:
+		r, g, b = x, c, 0
+	case h < 180:
+		r, g, b = 0, c, x
+	case h < 240:
+		r, g, b = 0, x, c
+	case h < 300:
+		r, g, b = x, 0, c
+	default:
+		r, g, b = c, 0, x
+	}
+	return r + m, g + m, b + m
 }

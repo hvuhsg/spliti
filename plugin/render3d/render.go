@@ -335,12 +335,26 @@ func presentSystem(c *app.Ctx) {
 	}()
 
 	_ = g.curPass.End()
+
+	// Frame read-back: record a copy of the surface texture (still valid
+	// pre-Present) into this frame's encoder, then deliver it after submit.
+	var cap *captureBuffer
+	if g.captureSink != nil {
+		cap = recordCapture(g, g.curEncoder)
+	}
+
 	cmd, err := g.curEncoder.Finish(nil)
 	if err != nil {
 		return
 	}
 	defer cmd.Release()
 	g.queue.Submit(cmd)
+
+	if cap != nil {
+		cap.deliver(g, g.captureSink)
+		g.captureSink = nil
+	}
+
 	g.surface.Present()
 }
 

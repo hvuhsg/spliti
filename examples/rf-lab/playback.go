@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/examples/radiosim/sim"
+	"github.com/mlange-42/arche/ecs"
 )
 
 const rxBufLen = 180 // received-constellation scatter ring buffer
@@ -18,11 +19,7 @@ type Play struct {
 	SymbolRate float64      // symbols per second (visual)
 	dirty      bool         // recompile requested (graph changed)
 
-	// live, updated each frame by fieldSystem:
-	CurTx    int // index of the symbol being emitted now
-	rx       [rxBufLen]complex128
-	rxHead   int
-	rxFilled int
+	CurTx int // live: index of the symbol being emitted now (set by fieldSystem)
 }
 
 func newPlay() *Play { return &Play{SymbolRate: 2, Mod: sim.QPSK} }
@@ -71,33 +68,12 @@ func (p *Play) symIndex(t float64) int {
 	return int(t*p.SymbolRate) % len(p.Symbols)
 }
 
-// pushRx records one received constellation sample (symbol + noise).
-func (p *Play) pushRx(v complex128) {
-	p.rx[p.rxHead] = v
-	p.rxHead = (p.rxHead + 1) % rxBufLen
-	if p.rxFilled < rxBufLen {
-		p.rxFilled++
-	}
-}
-
-// rxPoints copies the received scatter into dst (newest last); returns the count.
-func (p *Play) rxPoints(dst []complex128) int {
-	n := p.rxFilled
-	start := (p.rxHead - n + rxBufLen) % rxBufLen
-	for i := 0; i < n; i++ {
-		dst[i] = p.rx[(start+i)%rxBufLen]
-	}
-	return n
-}
-
-// playbackSystem recompiles a transmitter's chain when its graph has changed.
+// playbackSystem recompiles each transmitter's chain when its graph has changed.
 func playbackSystem(c *app.Ctx) {
-	d := txDevice(c)
-	if d == nil || d.Play == nil {
-		return
-	}
-	if d.Play.dirty {
-		d.Play.recompile(d.Graph)
-		d.Play.dirty = false
-	}
+	app.Query2[TxDevice, txTag](c, func(_ ecs.Entity, d *TxDevice, _ *txTag) {
+		if d.Play != nil && d.Play.dirty {
+			d.Play.recompile(d.Graph)
+			d.Play.dirty = false
+		}
+	})
 }
