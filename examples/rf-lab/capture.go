@@ -209,6 +209,6 @@ func openGraph(c *app.Ctx, sel Selection, e ecs.Entity) {
 	if ui == nil || ed == nil {
 		return
 	}
-	ed.target, ed.targetEnt, ed.editID, ed.redraw = sel, e, 0, true
+	ed.target, ed.targetEnt = sel, e
 	ui.Mode = ModeGraph
 }

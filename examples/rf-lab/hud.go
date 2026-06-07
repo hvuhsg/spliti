@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"image"
 	"image/color"
 	"math"
@@ -14,51 +13,30 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
-// HUD caches the last-rendered panel keys so each panel image is only
-// re-rasterized and re-uploaded when its contents actually change.
-type HUD struct {
-	lastReadout string
-	lastConfig  string
-}
-
 const (
-	readoutW, readoutH = 400, 286
-	configW            = 420
-	configBtnY         = 372 // OPEN GRAPH button top, below up to 3 control lines
-	scopeW, scopeH     = 460, 150
-	margin             = 16
+	scopeW, scopeH = 460, 150
+	margin         = 16
 )
 
-// cfgLine is one editable parameter row in the device config drawer: the value to
-// show and the keys that change it.
-type cfgLine struct{ value, keys string }
-
-// hudSystem rebuilds (when changed) and draws the always-on link readout and, when
-// a marker is selected, its config panel as a drawer on the right edge. Registered
-// as a pre-render system so the panels reflect this frame's state.
-func hudSystem(c *app.Ctx) {
+// plotsSystem draws the genuinely raster content — the receiver oscilloscope and
+// the constellation panels — via the render3d overlay2d image path, which suits
+// computed plots. The structured readout/config UI and the node editor moved to
+// Dear ImGui (hudUI / editorUI). Registered as a pre-render system so the panels
+// reflect this frame's state.
+func plotsSystem(c *app.Ctx) {
 	ui := app.GetResource[UI](c)
 	if ui != nil && ui.Mode == ModeGraph {
-		drawEditor(c)
-		return
+		return // the ImGui node editor owns the screen in graph mode
 	}
 
-	hud := app.GetResource[HUD](c)
 	lab := app.GetResource[Lab](c)
-	link := app.GetResource[Link](c)
 	field := app.GetResource[Field](c)
-	if hud == nil || lab == nil || link == nil {
-		return
-	}
-	txd, _, _ := focusTx(c, lab)
-	rxd, _, _ := focusRx(c, lab)
-
-	drawReadout(c, hud, lab, link, txd)
-	drawConfig(c, hud, lab, txd, rxd)
 	if field != nil {
 		drawScope(c, field)
 	}
-	drawConstellations(c, lab)
+	if lab != nil {
+		drawConstellations(c, lab)
+	}
 }
 
 // drawConstellations renders, along the bottom, a single constellation panel for
@@ -155,42 +133,6 @@ func drawDot(img *image.RGBA, cx, cy, rad int, col color.RGBA) {
 	fillRect(img, cx-rad, cy-rad, 2*rad+1, 2*rad+1, col)
 }
 
-// drawReadout renders and blits the top-left link-budget panel.
-func drawReadout(c *app.Ctx, hud *HUD, lab *Lab, link *Link, txd *TxDevice) {
-	freq, power := 24e6, 0.0
-	if txd != nil {
-		freq, power = txd.FreqHz, txd.PowerW
-	}
-	dBm := sim.DBm(link.PowerW)
-	key := fmt.Sprintf("%.1f|%.1f|%.1f|%.0f|%.1f", dBm, link.DistM, link.SNRdB,
-		freq/1e6, sim.DBm(power))
-	if key != hud.lastReadout {
-		if err := render3d.LoadPanel(c, "readout", buildReadout(dBm, link, freq, power)); err == nil {
-			hud.lastReadout = key
-		}
-	}
-	render3d.DrawPanel(c, "readout", margin, margin, readoutW, readoutH)
-}
-
-func buildReadout(dBm float64, link *Link, freq, power float64) image.Image {
-	img := image.NewRGBA(image.Rect(0, 0, readoutW, readoutH))
-	fillRect(img, 0, 0, readoutW, readoutH, color.RGBA{12, 16, 24, 215})
-	fillRect(img, 0, 0, readoutW, 5, color.RGBA{80, 200, 255, 255})
-
-	white := color.RGBA{235, 240, 245, 255}
-	dim := color.RGBA{150, 165, 180, 255}
-	accent := color.RGBA{120, 220, 255, 255}
-
-	drawText(img, 20, 22, "RECEIVER LINK", accent, 3)
-	drawText(img, 20, 78, fmt.Sprintf("Pr    %8.1f dBm", dBm), white, 2)
-	drawText(img, 20, 112, fmt.Sprintf("SNR   %8.1f dB", link.SNRdB), white, 2)
-	drawText(img, 20, 146, fmt.Sprintf("dist  %8.1f m", link.DistM), dim, 2)
-	drawText(img, 20, 180, fmt.Sprintf("freq  %8.0f MHz", freq/1e6), dim, 2)
-	drawText(img, 20, 214, fmt.Sprintf("lamda %8.1f m", sim.SpeedOfLight/freq), dim, 2)
-	drawText(img, 20, 248, fmt.Sprintf("Ptx   %8.1f dBm", sim.DBm(power)), dim, 2)
-	return img
-}
-
 // drawScope renders the receiver's oscilloscope (the field sampled at the Rx over
 // time) at the bottom-left. It is rebuilt every frame since the trace is live.
 func drawScope(c *app.Ctx, field *Field) {
@@ -283,74 +225,6 @@ func sign(v int) int {
 	default:
 		return 0
 	}
-}
-
-// drawConfig renders and blits the right-edge config drawer for the selected
-// device (TX or RX), including the OPEN GRAPH button that enters the editor for
-// that device's chain.
-func drawConfig(c *app.Ctx, hud *HUD, lab *Lab, txd *TxDevice, rxd *RxDevice) {
-	if lab.Sel == SelNone {
-		return
-	}
-	var title string
-	var lines []cfgLine
-	switch lab.Sel {
-	case SelTx:
-		if txd == nil {
-			return
-		}
-		title = "TRANSMITTER"
-		lines = []cfgLine{
-			{fmt.Sprintf("Power  %7.1f dBm", sim.DBm(txd.PowerW)), "up / down"},
-			{fmt.Sprintf("Freq   %7.0f MHz", txd.FreqHz/1e6), "left / right"},
-		}
-	case SelRx:
-		if rxd == nil {
-			return
-		}
-		title = "RECEIVER"
-		lines = []cfgLine{
-			{fmt.Sprintf("Tune   %7.0f MHz", rxd.TuneHz/1e6), "left / right"},
-			{fmt.Sprintf("Gain   %7.0f dBi", rxd.GainDBi), "up / down"},
-			{fmt.Sprintf("NoiseF %7.1f dB", rxd.NoiseFigDB), "[ / ]"},
-		}
-	}
-
-	// Full-height drawer flush against the right edge of the screen.
-	w, h := windowSize(c)
-	key := fmt.Sprintf("%s|%v|%d", title, lines, h)
-	if key != hud.lastConfig {
-		if err := render3d.LoadPanel(c, "config", buildConfig(title, lines, h)); err == nil {
-			hud.lastConfig = key
-		}
-	}
-	render3d.DrawPanel(c, "config", w-configW, 0, configW, h)
-}
-
-func buildConfig(title string, lines []cfgLine, configH int) image.Image {
-	img := image.NewRGBA(image.Rect(0, 0, configW, configH))
-	fillRect(img, 0, 0, configW, configH, color.RGBA{16, 14, 22, 224})
-	// Vertical accent stripe on the inner (left) edge — the "drawer" lip.
-	fillRect(img, 0, 0, 6, configH, color.RGBA{255, 200, 90, 255})
-
-	white := color.RGBA{240, 238, 245, 255}
-	dim := color.RGBA{170, 160, 185, 255}
-	accent := color.RGBA{255, 210, 120, 255}
-
-	drawText(img, 28, 28, title, accent, 3)
-
-	for i, ln := range lines {
-		y := 96 + i*84
-		drawText(img, 28, y, ln.value, white, 3)
-		drawText(img, 28, y+42, ln.keys, dim, 2)
-	}
-
-	// OPEN GRAPH button — local rect matches openGraphButtonRect's drawer-local
-	// position (x − (fbW−configW)).
-	drawButton(img, rect{24, configBtnY, configW - 48, 56}, "OPEN GRAPH", color.RGBA{40, 70, 110, 255})
-
-	drawText(img, 28, configH-34, "drag to move", dim, 2)
-	return img
 }
 
 // windowSize returns the current framebuffer size in pixels (not logical points),

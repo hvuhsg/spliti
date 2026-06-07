@@ -37,6 +37,7 @@ import (
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
+	splitiui "github.com/hvuhsg/spliti/plugin/ui"
 	"github.com/hvuhsg/spliti/schedule"
 	"github.com/mlange-42/arche/ecs"
 )
@@ -100,13 +101,13 @@ func main() {
 			Samples:    4,
 			VSync:      true,
 		},
+		splitiui.Plugin{}, // Dear ImGui GPU UI; must follow render3d.Plugin
 	)
 
 	app.InsertResource(a, newLab())
 	app.InsertResource(a, &Link{})
 	app.InsertResource(a, newField())
 	app.InsertResource(a, &CamCtl{})
-	app.InsertResource(a, &HUD{})
 	app.InsertResource(a, newUI())
 	app.InsertResource(a, newEditor())
 
@@ -117,12 +118,13 @@ func main() {
 	}
 
 	a.AddSystems(schedule.Startup, setup)
-	a.AddSystems(schedule.Update, editorSystem) // before controls: owns input in graph mode
 	a.AddSystems(schedule.Update, controlsSystem)
+	a.AddSystems(schedule.Update, hudUI)    // ImGui readout + config drawer
+	a.AddSystems(schedule.Update, editorUI) // ImGui node-graph editor (graph mode)
 	a.AddSystems(schedule.Update, playbackSystem)
 	a.AddSystems(schedule.Update, rfSystem)
 	render3d.AddPreRender(a, fieldSystem)
-	render3d.AddPreRender(a, hudSystem)
+	render3d.AddPreRender(a, plotsSystem) // overlay2d scope + constellation plots
 	a.AddSystems(schedule.Update, quitOnEscape)
 
 	a.Run()
@@ -131,6 +133,11 @@ func main() {
 func quitOnEscape(c *app.Ctx) {
 	// In graph mode Escape is handled by the editor (cancel edit / leave mode).
 	if ui := app.GetResource[UI](c); ui != nil && ui.Mode == ModeGraph {
+		return
+	}
+	// Don't quit while ImGui owns the keyboard (e.g. Escape cancelling a focused
+	// slider/text field).
+	if splitiui.WantCaptureKeyboard(c) {
 		return
 	}
 	for _, ev := range app.ReadEvents[render3d.KeyEvent](c) {

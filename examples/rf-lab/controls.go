@@ -8,6 +8,7 @@ import (
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
+	splitiui "github.com/hvuhsg/spliti/plugin/ui"
 	"github.com/mlange-42/arche/ecs"
 	"github.com/mlange-42/arche/generic"
 )
@@ -69,10 +70,15 @@ func controlsSystem(c *app.Ctx) {
 	}
 	dt := float32(tm.Delta().Seconds())
 
-	handleButtons(c, ctl, lab)
+	// When the pointer/focus is over an ImGui window, let the UI consume that
+	// input instead of selecting markers or adding/removing devices.
+	if !splitiui.WantCaptureMouse(c) {
+		handleButtons(c, ctl, lab)
+	}
 	handleLook(c, ctl)
-	handleConfigKeys(c, lab)
-	handleDeviceKeys(c, lab)
+	if !splitiui.WantCaptureKeyboard(c) {
+		handleDeviceKeys(c, lab)
+	}
 
 	// Camera movement (held keys), relative to view direction but kept horizontal.
 	fwd := ctl.forward()
@@ -200,55 +206,6 @@ func handleLook(c *app.Ctx, ctl *CamCtl) {
 		ctl.Pitch -= dy * lookSpeed
 		const lim = math.Pi/2 - 0.02
 		ctl.Pitch = clamp(ctl.Pitch, -lim, lim)
-	}
-}
-
-// handleConfigKeys edits the selected marker's parameters on arrow-key presses
-// (and repeats so holding a key ramps the value). The transmitter's power and
-// frequency, or the receiver's antenna gain and noise figure.
-func handleConfigKeys(c *app.Ctx, lab *Lab) {
-	if lab.Sel == SelNone {
-		return
-	}
-	txd := selectedTx(c, lab)
-	rxd := selectedRx(c, lab)
-	for _, ev := range app.ReadEvents[render3d.KeyEvent](c) {
-		if ev.Action != glfw.Press && ev.Action != glfw.Repeat {
-			continue
-		}
-		switch {
-		case lab.Sel == SelTx && txd != nil:
-			switch ev.Key {
-			case glfw.KeyUp: // +1 dB
-				txd.PowerW *= math.Pow(10, 0.1)
-			case glfw.KeyDown: // -1 dB
-				txd.PowerW *= math.Pow(10, -0.1)
-			case glfw.KeyRight: // +2 MHz (shorter wavelength)
-				txd.FreqHz += 2e6
-			case glfw.KeyLeft: // -2 MHz (longer wavelength)
-				txd.FreqHz -= 2e6
-			}
-			txd.PowerW = clampf(txd.PowerW, 1e-12, 1e-3) // -90 … 0 dBm
-			txd.FreqHz = clampf(txd.FreqHz, 10e6, 45e6)  // 10–45 MHz (λ 6.7–30 m, visible)
-		case lab.Sel == SelRx && rxd != nil:
-			switch ev.Key {
-			case glfw.KeyUp:
-				rxd.GainDBi += 1
-			case glfw.KeyDown:
-				rxd.GainDBi -= 1
-			case glfw.KeyRight: // tune up (shorter wavelength)
-				rxd.TuneHz += 2e6
-			case glfw.KeyLeft: // tune down (longer wavelength)
-				rxd.TuneHz -= 2e6
-			case glfw.KeyRightBracket: // ] louder noise floor
-				rxd.NoiseFigDB += 0.5
-			case glfw.KeyLeftBracket: // [ quieter noise floor
-				rxd.NoiseFigDB -= 0.5
-			}
-			rxd.GainDBi = clampf(rxd.GainDBi, -10, 30)
-			rxd.TuneHz = clampf(rxd.TuneHz, 10e6, 45e6) // same span as the transmitters
-			rxd.NoiseFigDB = clampf(rxd.NoiseFigDB, 0, 20)
-		}
 	}
 }
 
