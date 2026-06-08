@@ -10,6 +10,7 @@ import (
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	splitiui "github.com/hvuhsg/spliti/plugin/ui"
 	"github.com/mlange-42/arche/ecs"
+	"github.com/mlange-42/arche/generic"
 )
 
 // hudUI draws the always-on link readout and, when a device is selected, its
@@ -119,6 +120,34 @@ func drawConfigUI(c *app.Ctx, lab *Lab) {
 			imgui.Separator()
 			if imgui.Button("Open Graph") {
 				openGraphFor(c, SelRx, lab.Ent)
+			}
+		}
+		imgui.End()
+
+	case SelBlock:
+		tmap := generic.NewMap[render3d.Transform3D](c.World())
+		if lab.Ent.IsZero() || !tmap.Has(lab.Ent) {
+			return
+		}
+		tr := tmap.Get(lab.Ent)
+		if imgui.BeginV("Block", nil, hudWindowFlags) {
+			imgui.TextUnformatted("Line-of-sight obstacle.")
+			imgui.TextUnformatted("Drag onto the toolbar to remove.")
+			imgui.Separator()
+			imgui.SetNextItemWidth(itemW)
+			wv := tr.Scale.X
+			if imgui.SliderFloatV("Width (m)", &wv, 2, 30, "%.0f", 0) {
+				tr.Scale.X, tr.Scale.Z = wv, wv // keep the footprint square
+			}
+			imgui.SetNextItemWidth(itemW)
+			hv := tr.Scale.Y
+			if imgui.SliderFloatV("Height (m)", &hv, 2, 40, "%.0f", 0) {
+				tr.Scale.Y = hv
+				tr.Translation.Y = hv / 2 // keep it resting on the ground
+			}
+			imgui.Separator()
+			if imgui.Button("Remove") {
+				removeSelected(c, lab)
 			}
 		}
 		imgui.End()

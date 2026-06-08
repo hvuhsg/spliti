@@ -43,6 +43,10 @@ func rfSystem(c *app.Ctx) {
 	grx := math.Pow(10, rxd.GainDBi/10) // dBi → linear; Tx assumed isotropic
 	pr := freeSpacePowerW(txd.PowerW, txd.FreqHz, 1, grx, d)
 
+	// A block standing on the Tx→Rx line occludes the path, so the reported link
+	// budget collapses just as the wave does — more so at higher carriers.
+	pr *= losPower(float64(txPos.X), float64(txPos.Z), float64(rxPos.X), float64(rxPos.Z), txd.FreqHz, gatherBlocks(c))
+
 	link.DistM = d
 	link.PowerW = pr
 	link.SNRdB = sim.SNRdB(pr, rxd.rx(rxPos))

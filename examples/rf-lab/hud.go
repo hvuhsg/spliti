@@ -61,7 +61,13 @@ func drawConstellations(c *app.Ctx, lab *Lab) {
 		if rxd == nil || rxd.Decode == nil {
 			return
 		}
-		render3d.LoadPanel(c, "const_rx", buildRxConst(rxGraphMod(rxd.Graph), rxd.Decode))
+		// Only plot when the receiver is wired to a constellation — otherwise nothing
+		// demodulates the antenna and there is no scatter to show.
+		con, _ := rxChain(rxd.Graph)
+		if con == nil {
+			return
+		}
+		render3d.LoadPanel(c, "const_rx", buildRxConst(con.Mod, rxd.Decode))
 		render3d.DrawPanel(c, "const_rx", x, y, sz, sz)
 	}
 }

@@ -89,6 +89,9 @@ func fieldSystem(c *app.Ctx) {
 			srcs = append(srcs, txSrc{pos: t.Translation, freq: d.FreqHz, powerW: d.PowerW, play: d.Play, cr: cr, cg: cg, cb: cb})
 		})
 
+	// Obstacles that occlude line-of-sight, gathered once for this frame's tests.
+	blocks := gatherBlocks(c)
+
 	// Ground cells show the wave shape at a fixed reference amplitude, so the pattern
 	// stays visible regardless of transmit power. Each transmitter's field is summed
 	// into its own hue (keyed to its carrier), so same-frequency sources interfere
@@ -107,8 +110,11 @@ func fieldSystem(c *app.Ctx) {
 				k := 2 * math.Pi * s.freq / sim.SpeedOfLight
 				th := k * (ct - r)
 				sym := modSymbol(s.play, f.T-r/visualSpeed)
-				// Re{sym · e^{jθ}} = symRe·cosθ − symIm·sinθ, tinted by the source's hue.
-				v := (refAmp / r) * (real(sym)*math.Cos(th) - imag(sym)*math.Sin(th))
+				// Re{sym · e^{jθ}} = symRe·cosθ − symIm·sinθ, tinted by the source's hue
+				// and dimmed where a block casts a line-of-sight shadow on this cell
+				// (deeper, and sharper at higher carriers, per the source's wavelength).
+				los := losAmp(float64(s.pos.X), float64(s.pos.Z), float64(fc.X), float64(fc.Z), s.freq, blocks)
+				v := los * (refAmp / r) * (real(sym)*math.Cos(th) - imag(sym)*math.Sin(th))
 				cr += s.cr * v
 				cg += s.cg * v
 				cb += s.cb * v
@@ -173,11 +179,15 @@ func fieldSystem(c *app.Ctx) {
 		k := 2 * math.Pi * s.freq / sim.SpeedOfLight
 		th := k * (ct - r)
 		sym := modSymbol(s.play, f.T-r/visualSpeed)
-		amp := math.Sqrt(s.powerW) / r // received voltage amplitude (1/r loss)
+		// A block between this transmitter and the receiver attenuates everything it
+		// contributes — the trace, the constellation point, and its share of the SNR
+		// — by an amount that grows with this source's carrier frequency.
+		los := losAmp(float64(s.pos.X), float64(s.pos.Z), float64(rxPos.X), float64(rxPos.Z), s.freq, blocks)
+		amp := los * math.Sqrt(s.powerW) / r // received voltage amplitude (1/r loss)
 		fieldSample += amp * (real(sym)*math.Cos(th) - imag(sym)*math.Sin(th))
 		baseband += complex(amp, 0) * sym
 		ampSum += amp
-		totalPr += freeSpacePowerW(s.powerW, s.freq, 1, grx, r)
+		totalPr += freeSpacePowerW(s.powerW, s.freq, 1, grx, r) * los * los
 		if s.play != nil && s.play.Playing && len(s.play.Symbols) > 0 && amp > clkAmp {
 			clk, clkR, clkAmp = s.play, r, amp
 		}
@@ -196,6 +206,26 @@ func fieldSystem(c *app.Ctx) {
 	if rxd.Decode == nil {
 		return
 	}
+
+	// Walk the receiver's wires. con is the constellation the antenna feeds; sink is
+	// the Text node the constellation feeds. Either is nil when its link is cut, and
+	// data flows only as far as the wires reach.
+	con, sink := rxChain(rxd.Graph)
+
+	// Any Text node that isn't the wired sink gets no data, so it shows nothing.
+	for _, n := range rxd.Graph.Nodes {
+		if n.Kind == KindText && n != sink {
+			n.Text = ""
+		}
+	}
+
+	// No constellation wired to the receiver: nothing demodulates the antenna, so
+	// drop the scatter and decoded message entirely.
+	if con == nil {
+		rxd.Decode.reset()
+		return
+	}
+
 	var point complex128
 	if ampSum > 0 {
 		point = baseband / complex(ampSum, 0)
@@ -209,16 +239,19 @@ func fieldSystem(c *app.Ctx) {
 
 	// Decode only while a transmitter is actually sending; the strongest one drives
 	// the symbol clock. The recovered symbol comes from the wave, demodulated with
-	// the receiver's own chosen constellation, and is written into its sink node.
+	// the constellation the receiver is wired to.
 	if clk != nil {
 		te := f.T - clkR/visualSpeed
 		if te >= 0 {
 			arrIdx := int(te*clk.SymbolRate) % len(clk.Symbols)
-			rxd.Decode.step(arrIdx, recv, rxGraphMod(rxd.Graph))
-			if sink := textSink(rxd.Graph); sink != nil {
-				sink.Text = rxd.Decode.text()
-			}
+			rxd.Decode.step(arrIdx, recv, con.Mod)
 		}
+	}
+
+	// The decoded message reaches the Text node only if the constellation is wired
+	// to it; a severed Constellation → Text link leaves the display blank.
+	if sink != nil {
+		sink.Text = rxd.Decode.text()
 	}
 }
 

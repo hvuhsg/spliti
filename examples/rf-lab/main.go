@@ -1,26 +1,30 @@
 // Command rf-lab is an interactive RF learning playground built on
-// plugin/render3d. A ground plane carries transmitters and receivers, each of
-// which you can click to select and drag to move. You can add as many of either
-// as you like (T / R), so you can watch several sources interfere on the ground.
+// plugin/render3d. A ground plane carries transmitters, receivers, and
+// line-of-sight blocks, each of which you can click to select and drag to move.
+// A bottom toolbar lets you drag new objects into the scene and drag existing
+// ones back onto it to remove them; you can also add objects by key (T / R / B),
+// so you can watch several sources interfere and fall into shadow behind a block.
 // When one is selected a config panel pops up on the right: for a transmitter the
-// arrow keys change its power and frequency, for a receiver they tune its listening
-// frequency and antenna gain ([ / ] change its noise figure). A receiver only hears
-// transmitters within its bandwidth of the frequency it is tuned to. A readout in
-// the top-left shows the live link
-// budget — received power (dBm), distance, and SNR — for the focused pair,
-// computed from the free-space (Friis) path-loss model, so you can watch how
-// power, frequency, and distance trade off.
+// sliders change its power and frequency, for a receiver they tune its listening
+// frequency and antenna gain and noise figure, and for a block they resize it. A
+// receiver only hears transmitters within its bandwidth of the frequency it is
+// tuned to, and a block standing on the path heavily attenuates the link. A
+// readout in the top-left shows the live link budget — received power (dBm),
+// distance, and SNR — for the focused pair, computed from the free-space (Friis)
+// path-loss model, so you can watch how power, frequency, distance, and
+// obstacles trade off.
 //
 // Controls:
 //
 //	W/A/S/D     move the camera (horizontal), Q/E down/up
 //	right-drag  look around
-//	left-click  select a transmitter or receiver (click empty ground to deselect)
-//	left-drag   move the selected marker along the ground
+//	left-click  select a transmitter, receiver, or block (click empty ground to deselect)
+//	left-drag   move the selected object along the ground
+//	toolbar     drag a palette button onto the ground to add; drag an object onto the bar to remove
 //	↑/↓ ←/→     adjust the selected marker's parameters (see the config panel)
 //	[ / ]       receiver noise figure
-//	T / R       add a transmitter / receiver (the new one is selected)
-//	Del / ⌫     remove the selected transmitter or receiver
+//	T / R / B   add a transmitter / receiver / block (the new one is selected)
+//	Del / ⌫     remove the selected object
 //	Esc         quit
 //
 // Requires a GPU window, cgo, and a C toolchain:
@@ -64,6 +68,7 @@ const (
 	SelNone Selection = iota
 	SelTx
 	SelRx
+	SelBlock
 )
 
 // --- resources ---
@@ -110,6 +115,7 @@ func main() {
 	app.InsertResource(a, &CamCtl{})
 	app.InsertResource(a, newUI())
 	app.InsertResource(a, newEditor())
+	app.InsertResource(a, newDragDrop())
 
 	if dir, ok := captureEnabled(); ok {
 		must(os.MkdirAll(dir, 0o755))
@@ -119,8 +125,9 @@ func main() {
 
 	a.AddSystems(schedule.Startup, setup)
 	a.AddSystems(schedule.Update, controlsSystem)
-	a.AddSystems(schedule.Update, hudUI)    // ImGui readout + config drawer
-	a.AddSystems(schedule.Update, editorUI) // ImGui node-graph editor (graph mode)
+	a.AddSystems(schedule.Update, hudUI)     // ImGui readout + config drawer
+	a.AddSystems(schedule.Update, toolbarUI) // ImGui bottom object palette (drag to add/remove)
+	a.AddSystems(schedule.Update, editorUI)  // ImGui node-graph editor (graph mode)
 	a.AddSystems(schedule.Update, playbackSystem)
 	a.AddSystems(schedule.Update, rfSystem)
 	render3d.AddPreRender(a, fieldSystem)

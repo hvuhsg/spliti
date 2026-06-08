@@ -79,6 +79,18 @@ func (d *Decode) step(arrIdx int, recv complex128, mod sim.Modulation) {
 // text returns the live decoded message (what to display in the RX sink node).
 func (d *Decode) text() string { return d.building }
 
+// reset clears the decoder and the received-scatter buffer. The receiver calls it
+// when the chain is disconnected, so a severed link shows nothing downstream and a
+// later reconnect starts the message fresh instead of resuming mid-stream.
+func (d *Decode) reset() {
+	d.building = ""
+	d.done = ""
+	d.bits = d.bits[:0]
+	d.lastIdx = -1
+	d.rxHead = 0
+	d.rxFilled = 0
+}
+
 // nearestSymbolValue returns the constellation symbol value closest to recv — the
 // hard demodulation decision.
 func nearestSymbolValue(mod sim.Modulation, recv complex128) int {
@@ -92,22 +104,30 @@ func nearestSymbolValue(mod sim.Modulation, recv complex128) int {
 	return best
 }
 
-// rxGraphMod returns the modulation chosen by the RX chain's constellation node.
-func rxGraphMod(g *Graph) sim.Modulation {
+// rxChain follows the wires out of the receiver — Receiver → Constellation → Text —
+// so the graph topology actually gates the data flow. con is the constellation the
+// receiver is wired to (nil if that link is missing, so nothing demodulates the
+// antenna). sink is the Text node the constellation is wired to (nil if that link
+// is missing, so the decoded message reaches no display). Cutting either wire — or
+// deleting a node — stops the downstream node from updating.
+func rxChain(g *Graph) (con, sink *Node) {
+	var rx *Node
 	for _, n := range g.Nodes {
-		if n.Kind == KindConstellation {
-			return n.Mod
+		if n.Kind == KindReceiver {
+			rx = n
+			break
 		}
 	}
-	return sim.QPSK
-}
-
-// textSink returns the RX chain's Text node (the decoded-message display), or nil.
-func textSink(g *Graph) *Node {
-	for _, n := range g.Nodes {
-		if n.Kind == KindText {
-			return n
-		}
+	if rx == nil {
+		return nil, nil
 	}
-	return nil
+	con = g.outputOf(rx.ID)
+	if con == nil || con.Kind != KindConstellation {
+		return nil, nil
+	}
+	sink = g.outputOf(con.ID)
+	if sink == nil || sink.Kind != KindText {
+		return con, nil
+	}
+	return con, sink
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 
+	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/plugin/render3d"
@@ -111,6 +112,7 @@ func controlsSystem(c *app.Ctx) {
 	if ctl.dragging && lab.Sel != SelNone {
 		dragMarker(c, lab)
 	}
+	finalizeDrop(c, ctl, lab)
 	applyHighlight(c, lab)
 }
 
@@ -120,14 +122,16 @@ func controlsSystem(c *app.Ctx) {
 func handleButtons(c *app.Ctx, ctl *CamCtl, lab *Lab) {
 	txMap := generic.NewMap[txTag](c.World())
 	rxMap := generic.NewMap[rxTag](c.World())
+	blockMap := generic.NewMap[blockTag](c.World())
 	for _, ev := range app.ReadEvents[render3d.MouseButtonEvent](c) {
 		switch ev.Button {
 		case glfw.MouseButtonRight:
 			ctl.looking = ev.Action == glfw.Press
 			ctl.haveLast = false
 		case glfw.MouseButtonLeft:
+			// Left-release (drop/trash) is finalized centrally in finalizeDrop, which
+			// also catches releases over the toolbar that ImGui would otherwise eat.
 			if ev.Action == glfw.Release {
-				ctl.dragging = false
 				continue
 			}
 			origin, dir := render3d.ScreenToRay(c, ev.X, ev.Y)
@@ -137,10 +141,43 @@ func handleButtons(c *app.Ctx, ctl *CamCtl, lab *Lab) {
 				lab.Sel, lab.Ent, ctl.dragging = SelTx, hit.Entity, true
 			case ok && rxMap.Has(hit.Entity):
 				lab.Sel, lab.Ent, ctl.dragging = SelRx, hit.Entity, true
+			case ok && blockMap.Has(hit.Entity):
+				lab.Sel, lab.Ent, ctl.dragging = SelBlock, hit.Entity, true
 			default:
 				lab.Sel, lab.Ent, ctl.dragging = SelNone, ecs.Entity{}, false
 			}
 		}
+	}
+}
+
+// finalizeDrop resolves a left-button release for both drag flows, polling the
+// button directly so it fires even when the release lands over an ImGui window
+// (which consumes the event). A palette placement spawns the object on the ground
+// (or cancels if dropped back on the toolbar); a marker/block drag removes the
+// entity if dropped on the toolbar, otherwise leaves it where it was dragged.
+func finalizeDrop(c *app.Ctx, ctl *CamCtl, lab *Lab) {
+	dd := app.GetResource[DragDrop](c)
+	win := render3d.Window(c)
+	if dd == nil || win == nil || (!dd.placing && !ctl.dragging) {
+		return
+	}
+	if win.GetMouseButton(glfw.MouseButtonLeft) == glfw.Press {
+		return // still held — keep dragging
+	}
+	mp := imgui.MousePos()
+	overBar := dd.overBar(mp.X, mp.Y)
+	switch {
+	case dd.placing:
+		if !overBar {
+			x, y := win.GetCursorPos()
+			placeNew(c, lab, dd.kind, x, y)
+		}
+		dd.placing, dd.kind = false, SelNone
+	case ctl.dragging:
+		if overBar {
+			removeSelected(c, lab)
+		}
+		ctl.dragging = false
 	}
 }
 
@@ -157,6 +194,10 @@ func handleDeviceKeys(c *app.Ctx, lab *Lab) {
 			spawnTx(c.Commands(), spawnSpot[txTag](c, -30), lab, true)
 		case glfw.KeyR:
 			spawnRx(c.Commands(), spawnSpot[rxTag](c, 30), lab, true)
+		case glfw.KeyB:
+			pos := spawnSpot[blockTag](c, 0)
+			pos.Y = blockH / 2
+			spawnBlock(c.Commands(), pos, lab, true)
 		case glfw.KeyDelete, glfw.KeyBackspace:
 			removeSelected(c, lab)
 		}
@@ -216,20 +257,29 @@ func dragMarker(c *app.Ctx, lab *Lab) {
 	if win == nil || lab.Ent.IsZero() {
 		return
 	}
+	tmap := generic.NewMap[render3d.Transform3D](c.World())
+	if !tmap.Has(lab.Ent) {
+		return
+	}
+	tr := tmap.Get(lab.Ent)
+
+	// Markers ride at antenna height; blocks rest on the ground at half their
+	// (possibly resized) height, so each tracks the cursor on its own plane.
+	groundY := float32(markerHeight)
+	if lab.Sel == SelBlock {
+		groundY = tr.Scale.Y / 2
+	}
+
 	x, y := win.GetCursorPos()
 	origin, dir := render3d.ScreenToRay(c, x, y)
-	hit, ok := rayPlaneY(origin, dir, markerHeight)
+	hit, ok := rayPlaneY(origin, dir, groundY)
 	if !ok {
 		return
 	}
 	hit.X = clamp(hit.X, -planeHalf, planeHalf)
 	hit.Z = clamp(hit.Z, -planeHalf, planeHalf)
-	hit.Y = markerHeight
-
-	tmap := generic.NewMap[render3d.Transform3D](c.World())
-	if tmap.Has(lab.Ent) {
-		tmap.Get(lab.Ent).Translation = hit
-	}
+	hit.Y = groundY
+	tr.Translation = hit
 }
 
 // applyHighlight swaps each marker's material to its "selected" variant for the
@@ -240,6 +290,9 @@ func applyHighlight(c *app.Ctx, lab *Lab) {
 	})
 	app.Query2[render3d.MaterialRef, rxTag](c, func(e ecs.Entity, mr *render3d.MaterialRef, _ *rxTag) {
 		mr.Material = pick(lab.Sel == SelRx && e == lab.Ent, "rx_sel", "rx")
+	})
+	app.Query2[render3d.MaterialRef, blockTag](c, func(e ecs.Entity, mr *render3d.MaterialRef, _ *blockTag) {
+		mr.Material = pick(lab.Sel == SelBlock && e == lab.Ent, "block_sel", "block")
 	})
 }
 

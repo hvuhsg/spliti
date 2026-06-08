@@ -135,6 +135,17 @@ func (g *Graph) inputOf(id int) *Node {
 	return nil
 }
 
+// outputOf returns the node fed by the given node's output, or nil. A node drives
+// a single downstream node in these chains, so the first matching wire wins.
+func (g *Graph) outputOf(id int) *Node {
+	for _, e := range g.Edges {
+		if e.From == id {
+			return g.node(e.To)
+		}
+	}
+	return nil
+}
+
 // --- modulation / constellations ---
 
 // bitsPerSymbol returns how many bits each constellation symbol carries.
