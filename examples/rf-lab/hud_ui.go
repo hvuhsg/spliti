@@ -30,8 +30,40 @@ func hudUI(c *app.Ctx) {
 	txd, _, _ := focusTx(c, lab)
 
 	drawReadoutUI(link, txd)
+	drawChannelUI(c)
 	drawConfigUI(c, lab)
 }
+
+// drawChannelUI is the always-on global propagation panel: the multipath toggle
+// and its order/reflectivity controls, anchored under the top-left link readout.
+func drawChannelUI(c *app.Ctx) {
+	ch := app.GetResource[Channel](c)
+	if ch == nil {
+		return
+	}
+	s := splitiui.Scale(c)
+	imgui.SetNextWindowPosV(imgui.Vec2{X: margin, Y: channelPanelY * s}, imgui.CondAlways, imgui.Vec2{})
+	if imgui.BeginV("Channel", nil, hudWindowFlags|imgui.WindowFlagsAlwaysAutoResize) {
+		imgui.Checkbox("Multipath", &ch.Multipath)
+		if ch.Multipath {
+			imgui.SetNextItemWidth(140 * s)
+			order := int32(ch.MaxOrder)
+			if imgui.SliderInt("Max order", &order, 1, maxRefl) {
+				ch.MaxOrder = int(order)
+			}
+			imgui.SetNextItemWidth(140 * s)
+			refl := float32(ch.Reflectivity)
+			if imgui.SliderFloatV("Reflectivity", &refl, 0, 1, "%.2f", 0) {
+				ch.Reflectivity = float64(refl)
+			}
+		}
+	}
+	imgui.End()
+}
+
+// channelPanelY is the logical y-offset of the Channel panel, clearing the link
+// readout above it.
+const channelPanelY = 150
 
 const hudWindowFlags = imgui.WindowFlagsNoResize | imgui.WindowFlagsNoMove |
 	imgui.WindowFlagsNoCollapse | imgui.WindowFlagsNoSavedSettings

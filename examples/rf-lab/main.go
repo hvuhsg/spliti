@@ -12,7 +12,11 @@
 // readout in the top-left shows the live link budget — received power (dBm),
 // distance, and SNR — for the focused pair, computed from the free-space (Friis)
 // path-loss model, so you can watch how power, frequency, distance, and
-// obstacles trade off.
+// obstacles trade off. A "Channel" panel toggles multipath: with it on, the wave
+// also reaches the receiver by bouncing off the wall blocks, and the reflected
+// copies interfere with the direct path — you can watch standing waves band the
+// ground, the constellation spread and rotate, and the link fade in and out as
+// you drag the receiver a few wavelengths or move a wall.
 //
 // Controls:
 //
@@ -89,6 +93,19 @@ type Link struct {
 	DistM  float64 // Tx–Rx distance, meters
 }
 
+// Channel holds the global propagation settings. With Multipath off the lab uses
+// the single direct line-of-sight path it always has; turning it on adds specular
+// reflections off the wall blocks (see multipath.go), which interfere with the
+// direct path to produce ground standing waves, constellation fading, and the
+// reflected rays drawn in the scene.
+type Channel struct {
+	Multipath    bool    // master toggle; off ⇒ identical to the direct-path lab
+	MaxOrder     int     // reflection bounces to model, 1..maxRefl
+	Reflectivity float64 // per-bounce amplitude coefficient, 0..1
+}
+
+func newChannel() *Channel { return &Channel{Multipath: false, MaxOrder: 1, Reflectivity: 0.6} }
+
 const markerHeight = 2.5 // antenna head height above the ground, meters
 const planeHalf = 78.0   // drag clamp half-extent (the ground is 160 wide)
 
@@ -111,6 +128,7 @@ func main() {
 
 	app.InsertResource(a, newLab())
 	app.InsertResource(a, &Link{})
+	app.InsertResource(a, newChannel())
 	app.InsertResource(a, newField())
 	app.InsertResource(a, &CamCtl{})
 	app.InsertResource(a, newUI())
@@ -131,6 +149,7 @@ func main() {
 	a.AddSystems(schedule.Update, playbackSystem)
 	a.AddSystems(schedule.Update, rfSystem)
 	render3d.AddPreRender(a, fieldSystem)
+	render3d.AddPreRender(a, raysSystem)  // gizmo overlay: direct + reflected rays
 	render3d.AddPreRender(a, plotsSystem) // overlay2d scope + constellation plots
 	a.AddSystems(schedule.Update, quitOnEscape)
 

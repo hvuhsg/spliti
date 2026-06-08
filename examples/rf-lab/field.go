@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"math/cmplx"
 	"math/rand"
 
 	"github.com/hvuhsg/spliti/app"
@@ -61,7 +62,8 @@ type txSrc struct {
 	freq       float64
 	powerW     float64
 	play       *Play
-	cr, cg, cb float64 // hue for this carrier, so its wavefronts are recognizable
+	cr, cg, cb float64   // hue for this carrier, so its wavefronts are recognizable
+	nodes      []imgNode // precomputed reflection images (empty when multipath is off)
 }
 
 // fieldSystem advances the wave clock, repaints every ground cell with the
@@ -92,6 +94,27 @@ func fieldSystem(c *app.Ctx) {
 	// Obstacles that occlude line-of-sight, gathered once for this frame's tests.
 	blocks := gatherBlocks(c)
 
+	// Multipath: when enabled, each transmitter also reaches every point by bouncing
+	// off the wall faces. The image tree depends only on the transmitter and the
+	// faces, so it is built once per source here and reused for all field cells and
+	// the receiver. The 10 000-cell ground viz is clamped to fieldOrder bounces to
+	// stay interactive; the single-point receiver uses the full order.
+	ch := app.GetResource[Channel](c)
+	mp := ch != nil && ch.Multipath && len(blocks) > 0
+	refl, maxOrder, fieldOrder := 0.0, 0, 0
+	if mp {
+		refl, maxOrder = ch.Reflectivity, ch.MaxOrder
+		fieldOrder = maxOrder
+		if fieldOrder > 2 {
+			fieldOrder = 2
+		}
+		faces := blockFaces(blocks)
+		for i := range srcs {
+			srcs[i].nodes = buildImages(p2{x: float64(srcs[i].pos.X), z: float64(srcs[i].pos.Z)}, faces, maxOrder)
+		}
+	}
+	var taps []rfTap // reused per cell/receiver so the hot loop allocates nothing
+
 	// Ground cells show the wave shape at a fixed reference amplitude, so the pattern
 	// stays visible regardless of transmit power. Each transmitter's field is summed
 	// into its own hue (keyed to its carrier), so same-frequency sources interfere
@@ -102,7 +125,8 @@ func fieldSystem(c *app.Ctx) {
 	app.Query2[render3d.InstanceColor, fieldCell](c,
 		func(_ ecs.Entity, col *render3d.InstanceColor, fc *fieldCell) {
 			var cr, cg, cb float64
-			for _, s := range srcs {
+			for si := range srcs {
+				s := &srcs[si]
 				r := math.Hypot(float64(fc.X-s.pos.X), float64(fc.Z-s.pos.Z))
 				if r < rMin {
 					r = rMin
@@ -115,6 +139,24 @@ func fieldSystem(c *app.Ctx) {
 				// (deeper, and sharper at higher carriers, per the source's wavelength).
 				los := losAmp(float64(s.pos.X), float64(s.pos.Z), float64(fc.X), float64(fc.Z), s.freq, blocks)
 				v := los * (refAmp / r) * (real(sym)*math.Cos(th) - imag(sym)*math.Sin(th))
+				// Each reflected copy arrives later, having travelled its longer path, so
+				// it carries the symbol emitted earlier and a carrier phase set by that
+				// length — summing them into the same cell is the interference pattern.
+				if mp {
+					taps = taps[:0]
+					cellPt := p2{x: float64(fc.X), z: float64(fc.Z)}
+					srcPt := p2{x: float64(s.pos.X), z: float64(s.pos.Z)}
+					collectReflections(srcPt, cellPt, s.freq, blocks, s.nodes, refl, fieldOrder, &taps)
+					for _, tp := range taps {
+						rr := tp.length
+						if rr < rMin {
+							rr = rMin
+						}
+						thr := k * (ct - tp.length)
+						symr := modSymbol(s.play, f.T-tp.length/visualSpeed)
+						v += tp.atten * (refAmp / rr) * (real(symr)*math.Cos(thr) - imag(symr)*math.Sin(thr))
+					}
+				}
 				cr += s.cr * v
 				cg += s.cg * v
 				cb += s.cb * v
@@ -168,7 +210,8 @@ func fieldSystem(c *app.Ctx) {
 	var ampSum, totalPr float64
 	var clk *Play
 	var clkR, clkAmp float64
-	for _, s := range srcs {
+	for si := range srcs {
+		s := &srcs[si]
 		if math.Abs(s.freq-tuneFreq) > halfBW {
 			continue // off-channel: rejected by the receiver's filter
 		}
@@ -188,6 +231,30 @@ func fieldSystem(c *app.Ctx) {
 		baseband += complex(amp, 0) * sym
 		ampSum += amp
 		totalPr += freeSpacePowerW(s.powerW, s.freq, 1, grx, r) * los * los
+		// Each reflected copy adds its own delayed symbol and a carrier phase set by
+		// its longer path, referenced to the direct path (dDirect) so a clean
+		// single-path link still lands on its ideal constellation point while the
+		// relative delay of each bounce is what rotates and fades the sum.
+		if mp {
+			dDirect := math.Hypot(float64(rxPos.X-s.pos.X), float64(rxPos.Z-s.pos.Z))
+			taps = taps[:0]
+			rxPt := p2{x: float64(rxPos.X), z: float64(rxPos.Z)}
+			srcPt := p2{x: float64(s.pos.X), z: float64(s.pos.Z)}
+			collectReflections(srcPt, rxPt, s.freq, blocks, s.nodes, refl, maxOrder, &taps)
+			for _, tp := range taps {
+				rr := tp.length
+				if rr < rMin {
+					rr = rMin
+				}
+				thr := k * (ct - tp.length)
+				symr := modSymbol(s.play, f.T-tp.length/visualSpeed)
+				ampr := tp.atten * math.Sqrt(s.powerW) / rr
+				fieldSample += ampr * (real(symr)*math.Cos(thr) - imag(symr)*math.Sin(thr))
+				baseband += complex(ampr, 0) * symr * cmplx.Exp(complex(0, -k*(tp.length-dDirect)))
+				ampSum += ampr
+				totalPr += freeSpacePowerW(s.powerW, s.freq, 1, grx, tp.length) * tp.atten * tp.atten
+			}
+		}
 		if s.play != nil && s.play.Playing && len(s.play.Symbols) > 0 && amp > clkAmp {
 			clk, clkR, clkAmp = s.play, r, amp
 		}
