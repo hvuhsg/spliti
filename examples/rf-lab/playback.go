@@ -24,11 +24,11 @@ type Play struct {
 
 func newPlay() *Play { return &Play{SymbolRate: 2, Mod: sim.QPSK} }
 
-// recompile walks Transmitter ← Constellation ← Text and rebuilds the symbol
-// stream. If the chain is incomplete, Symbols is cleared (nothing to send).
-func (p *Play) recompile(g *Graph) {
-	p.Symbols = nil
-	var tx *Node
+// txChain walks Transmitter ← Constellation ← Text and returns the three nodes,
+// or all nils when the path is incomplete. The full chain is what gates both
+// symbol compilation and physical emission, so a transmitter with any wire cut
+// radiates nothing at all (see txRadiates / fieldSystem).
+func txChain(g *Graph) (txt, con, tx *Node) {
 	for _, n := range g.Nodes {
 		if n.Kind == KindTransmitter {
 			tx = n
@@ -36,14 +36,33 @@ func (p *Play) recompile(g *Graph) {
 		}
 	}
 	if tx == nil {
-		return
+		return nil, nil, nil
 	}
-	con := g.inputOf(tx.ID)
+	con = g.inputOf(tx.ID)
 	if con == nil || con.Kind != KindConstellation {
-		return
+		return nil, nil, nil
 	}
-	txt := g.inputOf(con.ID)
+	txt = g.inputOf(con.ID)
 	if txt == nil || txt.Kind != KindText {
+		return nil, nil, nil
+	}
+	return txt, con, tx
+}
+
+// txRadiates reports whether the transmit chain is fully wired
+// (Text → Constellation → Transmitter). A transmitter whose chain is severed
+// emits nothing — not even an unmodulated carrier.
+func txRadiates(g *Graph) bool {
+	_, _, tx := txChain(g)
+	return tx != nil
+}
+
+// recompile walks Transmitter ← Constellation ← Text and rebuilds the symbol
+// stream. If the chain is incomplete, Symbols is cleared (nothing to send).
+func (p *Play) recompile(g *Graph) {
+	p.Symbols = nil
+	txt, con, tx := txChain(g)
+	if tx == nil {
 		return
 	}
 	p.Mod = con.Mod

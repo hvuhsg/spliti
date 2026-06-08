@@ -49,6 +49,16 @@ func (f *Field) push(v float64) {
 	f.head = (f.head + 1) % scopeLen
 }
 
+// clear blanks the oscilloscope trace. The field system calls it when the focused
+// receiver has no antenna wired into a demodulator, so a severed RX chain shows a
+// flat line instead of a frozen, stale waveform.
+func (f *Field) clear() {
+	for i := range f.scope {
+		f.scope[i] = 0
+	}
+	f.head = 0
+}
+
 // ordered copies the ring buffer into dst oldest-to-newest (dst must be scopeLen).
 func (f *Field) ordered(dst []float64) {
 	for i := 0; i < scopeLen; i++ {
@@ -84,9 +94,15 @@ func fieldSystem(c *app.Ctx) {
 	ct := visualSpeed * f.T // phase reference; wavefronts move at visualSpeed
 
 	// Gather every transmitter's source parameters for the ground superposition.
+	// A transmitter whose chain is not fully wired radiates nothing, so it is left
+	// out of the field, the receiver sampling, and the symbol indicator entirely —
+	// cutting the wire into a Transmitter node silences it.
 	var srcs []txSrc
 	app.Query3[render3d.Transform3D, TxDevice, txTag](c,
 		func(_ ecs.Entity, t *render3d.Transform3D, d *TxDevice, _ *txTag) {
+			if !txRadiates(d.Graph) {
+				return
+			}
 			cr, cg, cb := freqColor(d.FreqHz)
 			srcs = append(srcs, txSrc{pos: t.Translation, freq: d.FreqHz, powerW: d.PowerW, play: d.Play, cr: cr, cg: cg, cb: cb})
 		})
@@ -185,6 +201,29 @@ func fieldSystem(c *app.Ctx) {
 	if !okr {
 		return
 	}
+
+	// Walk the receiver's wires up front. con is the constellation the antenna
+	// feeds; sink is the Text node the constellation feeds. Either is nil when its
+	// link is cut, and data flows only as far as the wires reach.
+	con, sink := rxChain(rxd.Graph)
+
+	// Any Text node that isn't the wired sink gets no data, so it shows nothing.
+	for _, n := range rxd.Graph.Nodes {
+		if n.Kind == KindText && n != sink {
+			n.Text = ""
+		}
+	}
+
+	// No constellation wired to the receiver: the antenna feeds nothing, so there is
+	// no input wave to show. Blank the oscilloscope and drop the scatter/message.
+	if con == nil {
+		f.clear()
+		if rxd.Decode != nil {
+			rxd.Decode.reset()
+		}
+		return
+	}
+
 	grx := math.Pow(10, rxd.GainDBi/10) // dBi → linear
 
 	// A real receiver is tuned to one carrier and its front-end filter rejects
@@ -271,25 +310,6 @@ func fieldSystem(c *app.Ctx) {
 	// (so one source lands on its ideal point, several land between theirs) plus
 	// noise sized by the total received SNR.
 	if rxd.Decode == nil {
-		return
-	}
-
-	// Walk the receiver's wires. con is the constellation the antenna feeds; sink is
-	// the Text node the constellation feeds. Either is nil when its link is cut, and
-	// data flows only as far as the wires reach.
-	con, sink := rxChain(rxd.Graph)
-
-	// Any Text node that isn't the wired sink gets no data, so it shows nothing.
-	for _, n := range rxd.Graph.Nodes {
-		if n.Kind == KindText && n != sink {
-			n.Text = ""
-		}
-	}
-
-	// No constellation wired to the receiver: nothing demodulates the antenna, so
-	// drop the scatter and decoded message entirely.
-	if con == nil {
-		rxd.Decode.reset()
 		return
 	}
 

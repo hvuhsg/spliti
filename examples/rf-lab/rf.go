@@ -36,7 +36,9 @@ func rfSystem(c *app.Ctx) {
 	}
 	txd, txPos, okt := focusTx(c, lab)
 	rxd, rxPos, okr := focusRx(c, lab)
-	if !okt || !okr {
+	if !okt || !okr || !txRadiates(txd.Graph) {
+		// No pair, or the transmitter's chain is severed (radiating nothing): the
+		// link carries no signal, so the budget collapses to zero.
 		link.DistM, link.PowerW, link.SNRdB = 0, 0, 0
 		return
 	}

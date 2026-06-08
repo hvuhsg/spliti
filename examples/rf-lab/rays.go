@@ -44,6 +44,10 @@ func raysSystem(c *app.Ctx) {
 	if !okt || !okr || txd == nil {
 		return
 	}
+	// A transmitter with a severed chain radiates nothing, so it casts no rays.
+	if !txRadiates(txd.Graph) {
+		return
+	}
 
 	// The direct ray, plus every reflected path off the walls.
 	tx := m.Vec3{X: txPos.X, Y: rayHeight, Z: txPos.Z}
