@@ -33,6 +33,33 @@ func hudUI(c *app.Ctx) {
 	readoutBottom := drawReadoutUI(link, txd, rxd)
 	drawChannelUI(c, readoutBottom)
 	drawConfigUI(c, lab)
+	drawScenariosUI(c, lab)
+}
+
+// drawScenariosUI is the top-center row of one-click preset layouts. Each rebuilds
+// the scene to demonstrate one effect; the underlying features are all reachable by
+// hand, so the buttons are a shortcut, not a separate mode.
+func drawScenariosUI(c *app.Ctx, lab *Lab) {
+	ch := app.GetResource[Channel](c)
+	if ch == nil {
+		return
+	}
+	fbW, _ := render3d.Size(c)
+	imgui.SetNextWindowPosV(imgui.Vec2{X: float32(fbW) / 2, Y: margin}, imgui.CondAlways, imgui.Vec2{X: 0.5})
+	if imgui.BeginV("Scenarios", nil, hudWindowFlags|imgui.WindowFlagsAlwaysAutoResize) {
+		for i, sc := range scenarioDefs {
+			if i > 0 {
+				imgui.SameLine()
+			}
+			if imgui.Button(sc.name) {
+				applyScenario(c, lab, ch, scenario(i))
+			}
+			if imgui.IsItemHovered() {
+				imgui.SetTooltip(sc.desc)
+			}
+		}
+	}
+	imgui.End()
 }
 
 // drawChannelUI is the always-on global propagation panel: the multipath toggle
@@ -156,6 +183,7 @@ func drawConfigUI(c *app.Ctx, lab *Lab) {
 				txd.FreqHz = float64(fmhz) * 1e6
 				markTxDirty(txd)
 			}
+			antennaUI(itemW, &txd.Directional, &txd.Azimuth, &txd.Beamwidth)
 			imgui.Separator()
 			if imgui.Button("Open Graph") {
 				openGraphFor(c, SelTx, lab.Ent)
@@ -187,6 +215,7 @@ func drawConfigUI(c *app.Ctx, lab *Lab) {
 			if imgui.SliderFloatV("Noise (dB)", &nf, 0, 20, "%.1f", 0) {
 				rxd.NoiseFigDB = float64(nf)
 			}
+			antennaUI(itemW, &rxd.Directional, &rxd.Azimuth, &rxd.Beamwidth)
 			imgui.Separator()
 			if imgui.Button("Open Graph") {
 				openGraphFor(c, SelRx, lab.Ent)
@@ -221,6 +250,26 @@ func drawConfigUI(c *app.Ctx, lab *Lab) {
 			}
 		}
 		imgui.End()
+	}
+}
+
+// antennaUI draws the shared directional-antenna controls (a toggle plus heading and
+// beamwidth sliders, in degrees) for either device, writing radians back through the
+// pointers. The boresight is drawn in the scene by raysSystem.
+func antennaUI(itemW float32, directional *bool, azimuth, beamwidth *float64) {
+	imgui.Checkbox("Directional", directional)
+	if !*directional {
+		return
+	}
+	imgui.SetNextItemWidth(itemW)
+	hd := float32(*azimuth * 180 / math.Pi)
+	if imgui.SliderFloatV("Heading", &hd, -180, 180, "%.0f deg", 0) {
+		*azimuth = float64(hd) * math.Pi / 180
+	}
+	imgui.SetNextItemWidth(itemW)
+	bw := float32(*beamwidth * 180 / math.Pi)
+	if imgui.SliderFloatV("Beamwidth", &bw, 10, 160, "%.0f deg", 0) {
+		*beamwidth = float64(bw) * math.Pi / 180
 	}
 }
 

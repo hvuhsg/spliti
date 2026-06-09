@@ -74,6 +74,8 @@ type txSrc struct {
 	play       *Play
 	cr, cg, cb float64   // hue for this carrier, so its wavefronts are recognizable
 	nodes      []imgNode // precomputed reflection images (empty when multipath is off)
+	dir        bool      // directional antenna (radiation shaped into a lobe)
+	az, bw     float64   // boresight azimuth and beamwidth when directional
 }
 
 // fieldFrame is the per-frame propagation context shared by the two passes: the wave
@@ -139,7 +141,7 @@ func newFieldFrame(c *app.Ctx, f *Field) *fieldFrame {
 				return
 			}
 			cr, cg, cb := freqColor(d.FreqHz)
-			fr.srcs = append(fr.srcs, txSrc{pos: t.Translation, freq: d.FreqHz, powerW: d.PowerW, play: d.Play, cr: cr, cg: cg, cb: cb})
+			fr.srcs = append(fr.srcs, txSrc{pos: t.Translation, freq: d.FreqHz, powerW: d.PowerW, play: d.Play, cr: cr, cg: cg, cb: cb, dir: d.Directional, az: d.Azimuth, bw: d.Beamwidth})
 		})
 
 	fr.blocks = gatherBlocks(c)
@@ -182,6 +184,13 @@ func paintField(c *app.Ctx, fr *fieldFrame) {
 				if r < rMin {
 					r = rMin
 				}
+				// A directional transmitter radiates a lobe, so the wavefronts brighten
+				// toward its boresight and fade off-axis — the antenna pattern made visible
+				// on the ground. antCell is the amplitude pattern (√ of the power pattern).
+				antCell := 1.0
+				if s.dir {
+					antCell = math.Sqrt(antennaGain(math.Atan2(float64(fc.Z-s.pos.Z), float64(fc.X-s.pos.X)), s.az, s.bw, false))
+				}
 				k := 2 * math.Pi * s.freq / sim.SpeedOfLight
 				th := k * (fr.ct - r)
 				sym := modSymbol(s.play, f.T-r/visualSpeed)
@@ -208,6 +217,7 @@ func paintField(c *app.Ctx, fr *fieldFrame) {
 						v += tp.atten * (refAmp / rr) * (real(symr)*math.Cos(thr) - imag(symr)*math.Sin(thr))
 					}
 				}
+				v *= antCell
 				cr += s.cr * v
 				cg += s.cg * v
 				cb += s.cb * v
@@ -304,15 +314,24 @@ func sampleReceiver(c *app.Ctx, fr *fieldFrame, lab *Lab) {
 		// and a clean link lands on its ideal point; detune within the passband and the
 		// points spin, sweeping through the decision boundaries and lifting the BER.
 		rot := cmplx.Exp(complex(0, (k-kLO)*ct))
+		// Directional antennas: each end's pattern weights this source by how well it is
+		// aimed at the other. dirTx is the transmitter's lobe toward the receiver, dirRx
+		// the receiver's lobe toward the transmitter (both 1 when omnidirectional). The
+		// pair multiplies the received power (powFactor) and scales the field amplitude by
+		// its root (antAmp), so a well-aimed link is strong and an off-axis one collapses.
+		bearTR := math.Atan2(float64(rxPos.Z-s.pos.Z), float64(rxPos.X-s.pos.X))
+		bearRT := math.Atan2(float64(s.pos.Z-rxPos.Z), float64(s.pos.X-rxPos.X))
+		powFactor := antennaGain(bearTR, s.az, s.bw, !s.dir) * antennaGain(bearRT, rxd.Azimuth, rxd.Beamwidth, !rxd.Directional)
+		antAmp := math.Sqrt(powFactor)
 		// A block between this transmitter and the receiver attenuates everything it
 		// contributes — the trace, the constellation point, and its share of the SNR
 		// — by an amount that grows with this source's carrier frequency.
 		los := losAmp(float64(s.pos.X), float64(s.pos.Z), float64(rxPos.X), float64(rxPos.Z), s.freq, fr.blocks)
-		amp := los * math.Sqrt(s.powerW) / r // received voltage amplitude (1/r loss)
+		amp := los * antAmp * math.Sqrt(s.powerW) / r // received voltage amplitude (1/r loss)
 		fieldSample += amp * (real(sym)*math.Cos(th) - imag(sym)*math.Sin(th))
 		baseband += complex(amp, 0) * sym * rot
 		ampSum += amp
-		totalPr += freeSpacePowerW(s.powerW, s.freq, 1, grx, r) * los * los
+		totalPr += freeSpacePowerW(s.powerW, s.freq, 1, grx, r) * los * los * powFactor
 		// Each reflected copy adds its own delayed symbol and a carrier phase set by
 		// its longer path, referenced to the direct path (dDirect) so a clean
 		// single-path link still lands on its ideal constellation point while the
@@ -330,11 +349,11 @@ func sampleReceiver(c *app.Ctx, fr *fieldFrame, lab *Lab) {
 				}
 				thr := k * (ct - tp.length)
 				symr := modSymbol(s.play, f.T-tp.length/visualSpeed)
-				ampr := tp.atten * math.Sqrt(s.powerW) / rr
+				ampr := tp.atten * antAmp * math.Sqrt(s.powerW) / rr
 				fieldSample += ampr * (real(symr)*math.Cos(thr) - imag(symr)*math.Sin(thr))
 				baseband += complex(ampr, 0) * symr * cmplx.Exp(complex(0, -k*(tp.length-dDirect))) * rot
 				ampSum += ampr
-				totalPr += freeSpacePowerW(s.powerW, s.freq, 1, grx, tp.length) * tp.atten * tp.atten
+				totalPr += freeSpacePowerW(s.powerW, s.freq, 1, grx, tp.length) * tp.atten * tp.atten * powFactor
 			}
 		}
 		// Ground reflection (two-ray): the wave also reaches the receiver by bouncing off
@@ -351,11 +370,11 @@ func sampleReceiver(c *app.Ctx, fr *fieldFrame, lab *Lab) {
 			}
 			thg := k * (ct - lg)
 			symg := modSymbol(s.play, f.T-lg/visualSpeed)
-			ampg := -fr.groundRefl * los * math.Sqrt(s.powerW) / lg // Γ < 0: grazing phase flip
+			ampg := -fr.groundRefl * los * antAmp * math.Sqrt(s.powerW) / lg // Γ < 0: grazing phase flip
 			fieldSample += ampg * (real(symg)*math.Cos(thg) - imag(symg)*math.Sin(thg))
 			baseband += complex(ampg, 0) * symg * cmplx.Exp(complex(0, -k*(lg-r))) * rot
 			ampSum += math.Abs(ampg)
-			totalPr += freeSpacePowerW(s.powerW, s.freq, 1, grx, lg) * fr.groundRefl * fr.groundRefl * los * los
+			totalPr += freeSpacePowerW(s.powerW, s.freq, 1, grx, lg) * fr.groundRefl * fr.groundRefl * los * los * powFactor
 		}
 		if s.play != nil && s.play.Playing && len(s.play.Symbols) > 0 && amp > clkAmp {
 			clk, clkR, clkAmp = s.play, r, amp

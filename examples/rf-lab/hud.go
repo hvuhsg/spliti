@@ -8,6 +8,7 @@ import (
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/examples/radiosim/sim"
 	"github.com/hvuhsg/spliti/plugin/render3d"
+	"github.com/mlange-42/arche/ecs"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	"golang.org/x/image/math/fixed"
@@ -15,7 +16,14 @@ import (
 
 const (
 	scopeW, scopeH = 460, 150
+	specH          = 120 // spectrum strip height, px (sits above the oscilloscope)
 	margin         = 16
+)
+
+// spectrum frequency span — the transmitter/receiver tunable band (10–45 MHz).
+const (
+	specFMin = 10e6
+	specFMax = 45e6
 )
 
 // plotsSystem draws the genuinely raster content — the receiver oscilloscope and
@@ -36,7 +44,87 @@ func plotsSystem(c *app.Ctx) {
 	}
 	if lab != nil {
 		drawConstellations(c, lab)
+		drawSpectrum(c, lab)
 	}
+}
+
+// specSrc is one transmitter's line in the spectrum: its carrier and transmit power,
+// tinted with the same per-carrier hue the field viz uses.
+type specSrc struct {
+	freq, powerDBm float64
+	r, g, b        float64
+}
+
+// drawSpectrum renders the frequency-domain view above the oscilloscope: each
+// radiating transmitter as a carrier line (height by transmit power, colored by its
+// carrier hue) over the 10–45 MHz band, with the focused receiver's passband
+// (tune ± bandwidth/2) shaded. It makes the front-end filter visible — a carrier
+// outside the shaded window is the one the receiver rejects, so two transmitters on
+// nearby carriers show exactly when they fall in or out of the same channel.
+func drawSpectrum(c *app.Ctx, lab *Lab) {
+	_, h := windowSize(c)
+	var srcs []specSrc
+	app.Query2[TxDevice, txTag](c, func(_ ecs.Entity, d *TxDevice, _ *txTag) {
+		if !txRadiates(d.Graph) {
+			return
+		}
+		r, g, b := freqColor(d.FreqHz)
+		srcs = append(srcs, specSrc{freq: d.FreqHz, powerDBm: sim.DBm(d.PowerW), r: r, g: g, b: b})
+	})
+	tune, bw := 24e6, 1e6
+	if rxd, _, ok := focusRx(c, lab); ok {
+		if tune = rxd.TuneHz; tune <= 0 {
+			tune = 24e6
+		}
+		bw = rxd.BandwidthHz
+	}
+	render3d.LoadPanel(c, "spectrum", buildSpectrum(srcs, tune, bw))
+	render3d.DrawPanel(c, "spectrum", margin, h-scopeH-margin-specH-8, scopeW, specH)
+}
+
+// buildSpectrum rasterizes the spectrum strip: the passband window, the carrier
+// lines, and the band end labels.
+func buildSpectrum(srcs []specSrc, tune, bw float64) image.Image {
+	const w = scopeW
+	img := image.NewRGBA(image.Rect(0, 0, w, specH))
+	fillRect(img, 0, 0, w, specH, color.RGBA{12, 14, 22, 210})
+	fillRect(img, 0, 0, w, 5, color.RGBA{150, 190, 255, 255})
+	accent := color.RGBA{150, 190, 255, 255}
+	drawText(img, 16, 22, "SPECTRUM", accent, 2)
+
+	const pad = 16
+	top, bot := 40, specH-20
+	plotW := w - 2*pad
+	xOf := func(f float64) int {
+		t := clampf((f-specFMin)/(specFMax-specFMin), 0, 1)
+		return pad + int(t*float64(plotW))
+	}
+
+	// Baseline and band-edge labels.
+	fillRect(img, pad, bot, plotW, 1, color.RGBA{50, 60, 80, 255})
+	drawText(img, pad, bot+4, "10", color.RGBA{90, 110, 140, 255}, 1)
+	drawText(img, pad+plotW-14, bot+4, "45", color.RGBA{90, 110, 140, 255}, 1)
+	drawText(img, pad+plotW/2-18, bot+4, "MHz", color.RGBA{90, 110, 140, 255}, 1)
+
+	// Receiver passband: everything inside this shaded window reaches the demodulator;
+	// carriers outside it are rejected by the front-end filter.
+	x1, x2 := xOf(tune-bw/2), xOf(tune+bw/2)
+	if x2 <= x1 {
+		x2 = x1 + 1
+	}
+	fillRect(img, x1, top, x2-x1, bot-top, color.RGBA{40, 70, 60, 120})
+	fillRect(img, xOf(tune), top, 1, bot-top, color.RGBA{120, 220, 170, 200}) // tune center
+
+	// Carrier lines: height encodes transmit power (−90…0 dBm → baseline…top).
+	for _, s := range srcs {
+		x := xOf(s.freq)
+		frac := clampf((s.powerDBm+90)/90, 0.04, 1)
+		barH := int(frac * float64(bot-top))
+		col := color.RGBA{uint8(40 + 215*s.r), uint8(40 + 215*s.g), uint8(40 + 215*s.b), 255}
+		fillRect(img, x-1, bot-barH, 3, barH, col)
+		drawDot(img, x, bot-barH, 2, col)
+	}
+	return img
 }
 
 // drawConstellations renders, along the bottom, a single constellation panel for

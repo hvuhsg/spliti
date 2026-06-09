@@ -18,14 +18,19 @@ type TxDevice struct {
 	FreqHz float64 // carrier frequency, hertz
 	Graph  *Graph  // this transmitter's TX signal chain
 	Play   *Play   // this transmitter's compiled/playing message
+
+	Directional bool    // concentrate radiation into a main lobe (else isotropic)
+	Azimuth     float64 // boresight heading in the XZ plane, radians (atan2(dz,dx))
+	Beamwidth   float64 // half-power beamwidth, radians
 }
 
 func newTxDevice() *TxDevice {
 	return &TxDevice{
-		PowerW: 1e-9, // 1 nW beacon: SNR is explorable
-		FreqHz: 24e6, // 24 MHz (VHF) → λ ≈ 12.5 m, visible across the field
-		Graph:  newTxGraph(),
-		Play:   newPlay(),
+		PowerW:    1e-9, // 1 nW beacon: SNR is explorable
+		FreqHz:    24e6, // 24 MHz (VHF) → λ ≈ 12.5 m, visible across the field
+		Graph:     newTxGraph(),
+		Play:      newPlay(),
+		Beamwidth: beamDefault,
 	}
 }
 
@@ -39,6 +44,10 @@ type RxDevice struct {
 	TempK       float64
 	Graph       *Graph  // this receiver's RX (decode) signal chain
 	Decode      *Decode // the running demodulator/decoder
+
+	Directional bool    // concentrate sensitivity into a main lobe (else isotropic)
+	Azimuth     float64 // boresight heading in the XZ plane, radians (atan2(dz,dx))
+	Beamwidth   float64 // half-power beamwidth, radians
 }
 
 func newRxDevice() *RxDevice {
@@ -50,6 +59,7 @@ func newRxDevice() *RxDevice {
 		TempK:       290,
 		Graph:       newRxGraph(),
 		Decode:      newDecode(),
+		Beamwidth:   beamDefault,
 	}
 }
 
