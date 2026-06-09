@@ -102,12 +102,20 @@ type Link struct {
 // direct path to produce ground standing waves, constellation fading, and the
 // reflected rays drawn in the scene.
 type Channel struct {
-	Multipath    bool    // master toggle; off ⇒ identical to the direct-path lab
+	Multipath    bool    // wall-reflection master toggle; off ⇒ no wall bounces
 	MaxOrder     int     // reflection bounces to model, 1..maxRefl
 	Reflectivity float64 // per-bounce amplitude coefficient, 0..1
+
+	// Ground reflection is the classic two-ray model: a single bounce off the ground
+	// plane that interferes with the direct path. It needs no walls, so it is an
+	// independent toggle; off by default so the bare lab is a clean single path.
+	Ground     bool    // enable the ground bounce (two-ray fading)
+	GroundRefl float64 // ground reflection magnitude, 0..1 (phase flips at grazing)
 }
 
-func newChannel() *Channel { return &Channel{Multipath: false, MaxOrder: 1, Reflectivity: 0.6} }
+func newChannel() *Channel {
+	return &Channel{Multipath: false, MaxOrder: 1, Reflectivity: 0.6, Ground: false, GroundRefl: 0.9}
+}
 
 const markerHeight = 2.5 // antenna head height above the ground, meters
 const planeHalf = 78.0   // drag clamp half-extent (the ground is 160 wide)

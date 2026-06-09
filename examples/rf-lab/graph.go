@@ -255,9 +255,31 @@ func nextMod(mod sim.Modulation) sim.Modulation {
 	}
 }
 
+// constellations caches each modulation's ideal points, built once at startup. The
+// points are immutable and no caller mutates the returned slice, so the cache is
+// shared and read-only — the hot demod/EVM/BER paths call constellation() per symbol
+// and must not allocate. Reads of a map that is never written after init are safe
+// even if systems run concurrently.
+var constellations = func() map[sim.Modulation][]complex128 {
+	m := make(map[sim.Modulation][]complex128, 4)
+	for _, mod := range []sim.Modulation{sim.BPSK, sim.QPSK, sim.QAM16, sim.QAM64} {
+		m[mod] = buildConstellation(mod)
+	}
+	return m
+}()
+
 // constellation returns the ideal symbol points, indexed by symbol value
-// (0 … 2^bits−1), normalized so the outermost coordinate is ±1.
+// (0 … 2^bits−1), normalized so the outermost coordinate is ±1. The slice is the
+// shared cached one — treat it as read-only.
 func constellation(mod sim.Modulation) []complex128 {
+	if pts, ok := constellations[mod]; ok {
+		return pts
+	}
+	return buildConstellation(mod)
+}
+
+// buildConstellation constructs a modulation's ideal points (see constellation).
+func buildConstellation(mod sim.Modulation) []complex128 {
 	switch mod {
 	case sim.BPSK:
 		return []complex128{-1, 1}

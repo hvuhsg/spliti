@@ -60,6 +60,14 @@ func drawChannelUI(c *app.Ctx, top float32) {
 				ch.Reflectivity = float64(refl)
 			}
 		}
+		imgui.Checkbox("Ground reflection", &ch.Ground)
+		if ch.Ground {
+			imgui.SetNextItemWidth(140 * s)
+			gr := float32(ch.GroundRefl)
+			if imgui.SliderFloatV("Ground refl", &gr, 0, 1, "%.2f", 0) {
+				ch.GroundRefl = float64(gr)
+			}
+		}
 	}
 	imgui.End()
 }
@@ -163,7 +171,10 @@ func drawConfigUI(c *app.Ctx, lab *Lab) {
 		if imgui.BeginV("Receiver", nil, hudWindowFlags) {
 			imgui.SetNextItemWidth(itemW)
 			tune := float32(rxd.TuneHz / 1e6)
-			if imgui.SliderFloatV("Tune (MHz)", &tune, 10, 45, "%.0f", 0) {
+			// 0.01 MHz precision so the receiver can be detuned *within* its 1 MHz
+			// passband — a small carrier-frequency offset spins the constellation
+			// (see sampleReceiver) instead of only snapping fully on- or off-channel.
+			if imgui.SliderFloatV("Tune (MHz)", &tune, 10, 45, "%.2f", 0) {
 				rxd.TuneHz = float64(tune) * 1e6
 			}
 			imgui.SetNextItemWidth(itemW)

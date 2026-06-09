@@ -76,6 +76,24 @@ type txSrc struct {
 	nodes      []imgNode // precomputed reflection images (empty when multipath is off)
 }
 
+// fieldFrame is the per-frame propagation context shared by the two passes: the wave
+// clock, every radiating source, the occluding blocks, and the multipath settings.
+// Gathering it once keeps the ground-field painting and the receiver sampling
+// consistent — they sum the same wave — and keeps each pass readable.
+type fieldFrame struct {
+	f          *Field
+	t, ct      float64 // wave clock (s) and its phase reference (visualSpeed·t)
+	srcs       []txSrc
+	blocks     []blockBox
+	mp         bool    // wall multipath enabled this frame
+	refl       float64 // per-bounce wall reflection coefficient
+	maxOrder   int     // reflection bounces for the single-point receiver
+	fieldOrder int     // reflection bounces for the 10k-cell ground viz (clamped)
+	ground     bool    // ground (two-ray) reflection enabled this frame
+	groundRefl float64 // ground reflection magnitude
+	taps       []rfTap // scratch reused per cell/receiver so the hot loops don't allocate
+}
+
 // fieldSystem advances the wave clock, repaints every ground cell with the
 // instantaneous field summed over all transmitters (so multiple sources visibly
 // interfere), and samples that same superposed wave at the focused receiver for
@@ -91,84 +109,101 @@ func fieldSystem(c *app.Ctx) {
 		f.T += tm.Delta().Seconds()
 	}
 
-	ct := visualSpeed * f.T // phase reference; wavefronts move at visualSpeed
+	fr := newFieldFrame(c, f)
+	paintField(c, fr)
 
-	// Gather every transmitter's source parameters for the ground superposition.
-	// A transmitter whose chain is not fully wired radiates nothing, so it is left
-	// out of the field, the receiver sampling, and the symbol indicator entirely —
-	// cutting the wire into a Transmitter node silences it.
-	var srcs []txSrc
+	// Light the "current symbol" indicator on every transmitting source, so a
+	// selected transmitter's ideal-constellation panel can show what it is sending.
+	for _, s := range fr.srcs {
+		if s.play != nil && s.play.Playing && len(s.play.Symbols) > 0 {
+			s.play.CurTx = s.play.symIndex(f.T)
+		}
+	}
+
+	sampleReceiver(c, fr, lab)
+}
+
+// newFieldFrame gathers this frame's propagation context: every radiating source
+// (a transmitter whose chain is not fully wired radiates nothing, so it is left out
+// of the field, the receiver sampling, and the symbol indicator entirely — cutting
+// the wire into a Transmitter node silences it), the occluding blocks, and the
+// multipath images. The image tree depends only on the transmitter and the faces,
+// so it is built once per source here and reused for all field cells and the
+// receiver. The 10 000-cell ground viz is clamped to fieldOrder bounces to stay
+// interactive; the single-point receiver uses the full order.
+func newFieldFrame(c *app.Ctx, f *Field) *fieldFrame {
+	fr := &fieldFrame{f: f, t: f.T, ct: visualSpeed * f.T}
 	app.Query3[render3d.Transform3D, TxDevice, txTag](c,
 		func(_ ecs.Entity, t *render3d.Transform3D, d *TxDevice, _ *txTag) {
 			if !txRadiates(d.Graph) {
 				return
 			}
 			cr, cg, cb := freqColor(d.FreqHz)
-			srcs = append(srcs, txSrc{pos: t.Translation, freq: d.FreqHz, powerW: d.PowerW, play: d.Play, cr: cr, cg: cg, cb: cb})
+			fr.srcs = append(fr.srcs, txSrc{pos: t.Translation, freq: d.FreqHz, powerW: d.PowerW, play: d.Play, cr: cr, cg: cg, cb: cb})
 		})
 
-	// Obstacles that occlude line-of-sight, gathered once for this frame's tests.
-	blocks := gatherBlocks(c)
+	fr.blocks = gatherBlocks(c)
 
-	// Multipath: when enabled, each transmitter also reaches every point by bouncing
-	// off the wall faces. The image tree depends only on the transmitter and the
-	// faces, so it is built once per source here and reused for all field cells and
-	// the receiver. The 10 000-cell ground viz is clamped to fieldOrder bounces to
-	// stay interactive; the single-point receiver uses the full order.
 	ch := app.GetResource[Channel](c)
-	mp := ch != nil && ch.Multipath && len(blocks) > 0
-	refl, maxOrder, fieldOrder := 0.0, 0, 0
-	if mp {
-		refl, maxOrder = ch.Reflectivity, ch.MaxOrder
-		fieldOrder = maxOrder
-		if fieldOrder > 2 {
-			fieldOrder = 2
+	if ch != nil && ch.Ground {
+		fr.ground, fr.groundRefl = true, ch.GroundRefl
+	}
+	fr.mp = ch != nil && ch.Multipath && len(fr.blocks) > 0
+	if fr.mp {
+		fr.refl, fr.maxOrder = ch.Reflectivity, ch.MaxOrder
+		fr.fieldOrder = fr.maxOrder
+		if fr.fieldOrder > 2 {
+			fr.fieldOrder = 2
 		}
-		faces := blockFaces(blocks)
-		for i := range srcs {
-			srcs[i].nodes = buildImages(p2{x: float64(srcs[i].pos.X), z: float64(srcs[i].pos.Z)}, faces, maxOrder)
+		faces := blockFaces(fr.blocks)
+		for i := range fr.srcs {
+			fr.srcs[i].nodes = buildImages(p2{x: float64(fr.srcs[i].pos.X), z: float64(fr.srcs[i].pos.Z)}, faces, fr.maxOrder)
 		}
 	}
-	var taps []rfTap // reused per cell/receiver so the hot loop allocates nothing
+	return fr
+}
 
-	// Ground cells show the wave shape at a fixed reference amplitude, so the pattern
-	// stays visible regardless of transmit power. Each transmitter's field is summed
-	// into its own hue (keyed to its carrier), so same-frequency sources interfere
-	// within a shared color while different frequencies show as different colors that
-	// mix where they cross. When a message is playing, each cell carries the symbol
-	// that left a transmitter at time (t − r/visualSpeed).
+// paintField repaints every ground cell with the instantaneous field summed over all
+// transmitters. Ground cells show the wave shape at a fixed reference amplitude, so
+// the pattern stays visible regardless of transmit power. Each transmitter's field is
+// summed into its own hue (keyed to its carrier), so same-frequency sources interfere
+// within a shared color while different frequencies show as different colors that mix
+// where they cross. When a message is playing, each cell carries the symbol that left
+// a transmitter at time (t − r/visualSpeed).
+func paintField(c *app.Ctx, fr *fieldFrame) {
 	const ambient = 0.04
+	f := fr.f
 	app.Query2[render3d.InstanceColor, fieldCell](c,
 		func(_ ecs.Entity, col *render3d.InstanceColor, fc *fieldCell) {
 			var cr, cg, cb float64
-			for si := range srcs {
-				s := &srcs[si]
+			for si := range fr.srcs {
+				s := &fr.srcs[si]
 				r := math.Hypot(float64(fc.X-s.pos.X), float64(fc.Z-s.pos.Z))
 				if r < rMin {
 					r = rMin
 				}
 				k := 2 * math.Pi * s.freq / sim.SpeedOfLight
-				th := k * (ct - r)
+				th := k * (fr.ct - r)
 				sym := modSymbol(s.play, f.T-r/visualSpeed)
 				// Re{sym · e^{jθ}} = symRe·cosθ − symIm·sinθ, tinted by the source's hue
 				// and dimmed where a block casts a line-of-sight shadow on this cell
 				// (deeper, and sharper at higher carriers, per the source's wavelength).
-				los := losAmp(float64(s.pos.X), float64(s.pos.Z), float64(fc.X), float64(fc.Z), s.freq, blocks)
+				los := losAmp(float64(s.pos.X), float64(s.pos.Z), float64(fc.X), float64(fc.Z), s.freq, fr.blocks)
 				v := los * (refAmp / r) * (real(sym)*math.Cos(th) - imag(sym)*math.Sin(th))
 				// Each reflected copy arrives later, having travelled its longer path, so
 				// it carries the symbol emitted earlier and a carrier phase set by that
 				// length — summing them into the same cell is the interference pattern.
-				if mp {
-					taps = taps[:0]
+				if fr.mp {
+					fr.taps = fr.taps[:0]
 					cellPt := p2{x: float64(fc.X), z: float64(fc.Z)}
 					srcPt := p2{x: float64(s.pos.X), z: float64(s.pos.Z)}
-					collectReflections(srcPt, cellPt, s.freq, blocks, s.nodes, refl, fieldOrder, &taps)
-					for _, tp := range taps {
+					collectReflections(srcPt, cellPt, s.freq, fr.blocks, s.nodes, fr.refl, fr.fieldOrder, &fr.taps)
+					for _, tp := range fr.taps {
 						rr := tp.length
 						if rr < rMin {
 							rr = rMin
 						}
-						thr := k * (ct - tp.length)
+						thr := k * (fr.ct - tp.length)
 						symr := modSymbol(s.play, f.T-tp.length/visualSpeed)
 						v += tp.atten * (refAmp / rr) * (real(symr)*math.Cos(thr) - imag(symr)*math.Sin(thr))
 					}
@@ -186,17 +221,14 @@ func fieldSystem(c *app.Ctx) {
 				A: 1,
 			}
 		})
+}
 
-	// Light the "current symbol" indicator on every transmitting source, so a
-	// selected transmitter's ideal-constellation panel can show what it is sending.
-	for _, s := range srcs {
-		if s.play != nil && s.play.Playing && len(s.play.Symbols) > 0 {
-			s.play.CurTx = s.play.symIndex(f.T)
-		}
-	}
-
-	// Everything below samples the *wave* at the focused receiver — the actual
-	// superposition of every transmitter — rather than any single transmitter.
+// sampleReceiver samples the superposed wave at the focused receiver — the actual sum
+// of every transmitter, not any single one — and drives its oscilloscope, scatter,
+// decoder, and the link readout from that one sample.
+func sampleReceiver(c *app.Ctx, fr *fieldFrame, lab *Lab) {
+	f := fr.f
+	ct := fr.ct
 	rxd, rxPos, okr := focusRx(c, lab)
 	link := app.GetResource[Link](c)
 	if !okr {
@@ -240,6 +272,7 @@ func fieldSystem(c *app.Ctx) {
 		tuneFreq = 24e6
 	}
 	halfBW := rxd.BandwidthHz / 2
+	kLO := 2 * math.Pi * tuneFreq / sim.SpeedOfLight // the receiver's local-oscillator wavenumber
 
 	// Accumulate only what the tuned front-end passes (within tuneFreq ± bandwidth/2):
 	//   - fieldSample: the superposed real (passband) field → the oscilloscope trace.
@@ -253,8 +286,8 @@ func fieldSystem(c *app.Ctx) {
 	var ampSum, totalPr float64
 	var clk *Play
 	var clkR, clkAmp float64
-	for si := range srcs {
-		s := &srcs[si]
+	for si := range fr.srcs {
+		s := &fr.srcs[si]
 		if math.Abs(s.freq-tuneFreq) > halfBW {
 			continue // off-channel: rejected by the receiver's filter
 		}
@@ -265,26 +298,32 @@ func fieldSystem(c *app.Ctx) {
 		k := 2 * math.Pi * s.freq / sim.SpeedOfLight
 		th := k * (ct - r)
 		sym := modSymbol(s.play, f.T-r/visualSpeed)
+		// A receiver tuned off this source's carrier mixes it down to a non-zero offset
+		// rather than true zero-IF, so its baseband — the constellation — rotates at the
+		// carrier-frequency offset Δf = f_src − f_tune. On-tune (Δf = 0) the phasor is 1
+		// and a clean link lands on its ideal point; detune within the passband and the
+		// points spin, sweeping through the decision boundaries and lifting the BER.
+		rot := cmplx.Exp(complex(0, (k-kLO)*ct))
 		// A block between this transmitter and the receiver attenuates everything it
 		// contributes — the trace, the constellation point, and its share of the SNR
 		// — by an amount that grows with this source's carrier frequency.
-		los := losAmp(float64(s.pos.X), float64(s.pos.Z), float64(rxPos.X), float64(rxPos.Z), s.freq, blocks)
+		los := losAmp(float64(s.pos.X), float64(s.pos.Z), float64(rxPos.X), float64(rxPos.Z), s.freq, fr.blocks)
 		amp := los * math.Sqrt(s.powerW) / r // received voltage amplitude (1/r loss)
 		fieldSample += amp * (real(sym)*math.Cos(th) - imag(sym)*math.Sin(th))
-		baseband += complex(amp, 0) * sym
+		baseband += complex(amp, 0) * sym * rot
 		ampSum += amp
 		totalPr += freeSpacePowerW(s.powerW, s.freq, 1, grx, r) * los * los
 		// Each reflected copy adds its own delayed symbol and a carrier phase set by
 		// its longer path, referenced to the direct path (dDirect) so a clean
 		// single-path link still lands on its ideal constellation point while the
 		// relative delay of each bounce is what rotates and fades the sum.
-		if mp {
+		if fr.mp {
 			dDirect := math.Hypot(float64(rxPos.X-s.pos.X), float64(rxPos.Z-s.pos.Z))
-			taps = taps[:0]
+			fr.taps = fr.taps[:0]
 			rxPt := p2{x: float64(rxPos.X), z: float64(rxPos.Z)}
 			srcPt := p2{x: float64(s.pos.X), z: float64(s.pos.Z)}
-			collectReflections(srcPt, rxPt, s.freq, blocks, s.nodes, refl, maxOrder, &taps)
-			for _, tp := range taps {
+			collectReflections(srcPt, rxPt, s.freq, fr.blocks, s.nodes, fr.refl, fr.maxOrder, &fr.taps)
+			for _, tp := range fr.taps {
 				rr := tp.length
 				if rr < rMin {
 					rr = rMin
@@ -293,10 +332,30 @@ func fieldSystem(c *app.Ctx) {
 				symr := modSymbol(s.play, f.T-tp.length/visualSpeed)
 				ampr := tp.atten * math.Sqrt(s.powerW) / rr
 				fieldSample += ampr * (real(symr)*math.Cos(thr) - imag(symr)*math.Sin(thr))
-				baseband += complex(ampr, 0) * symr * cmplx.Exp(complex(0, -k*(tp.length-dDirect)))
+				baseband += complex(ampr, 0) * symr * cmplx.Exp(complex(0, -k*(tp.length-dDirect))) * rot
 				ampSum += ampr
 				totalPr += freeSpacePowerW(s.powerW, s.freq, 1, grx, tp.length) * tp.atten * tp.atten
 			}
+		}
+		// Ground reflection (two-ray): the wave also reaches the receiver by bouncing off
+		// the ground. Both antennas stand at markerHeight, so the image source sits an
+		// equal depth below ground and the reflected ray runs sqrt(r² + (2·markerHeight)²).
+		// At grazing angles the ground flips the phase (Γ ≈ −groundRefl), so it interferes
+		// with the direct path — the textbook fading that lays nulls and peaks along the
+		// link as the receiver moves, with no obstacle needed. It is referenced to the
+		// direct path (lg − r) like the wall taps so a clean link still lands on its point.
+		if fr.ground {
+			lg := math.Hypot(r, 2*markerHeight)
+			if lg < rMin {
+				lg = rMin
+			}
+			thg := k * (ct - lg)
+			symg := modSymbol(s.play, f.T-lg/visualSpeed)
+			ampg := -fr.groundRefl * los * math.Sqrt(s.powerW) / lg // Γ < 0: grazing phase flip
+			fieldSample += ampg * (real(symg)*math.Cos(thg) - imag(symg)*math.Sin(thg))
+			baseband += complex(ampg, 0) * symg * cmplx.Exp(complex(0, -k*(lg-r))) * rot
+			ampSum += math.Abs(ampg)
+			totalPr += freeSpacePowerW(s.powerW, s.freq, 1, grx, lg) * fr.groundRefl * fr.groundRefl * los * los
 		}
 		if s.play != nil && s.play.Playing && len(s.play.Symbols) > 0 && amp > clkAmp {
 			clk, clkR, clkAmp = s.play, r, amp
