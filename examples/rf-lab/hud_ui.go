@@ -28,21 +28,24 @@ func hudUI(c *app.Ctx) {
 		return
 	}
 	txd, _, _ := focusTx(c, lab)
+	rxd, _, _ := focusRx(c, lab)
 
-	drawReadoutUI(link, txd)
-	drawChannelUI(c)
+	readoutBottom := drawReadoutUI(link, txd, rxd)
+	drawChannelUI(c, readoutBottom)
 	drawConfigUI(c, lab)
 }
 
 // drawChannelUI is the always-on global propagation panel: the multipath toggle
-// and its order/reflectivity controls, anchored under the top-left link readout.
-func drawChannelUI(c *app.Ctx) {
+// and its order/reflectivity controls, anchored just below the top-left link
+// readout (top is that readout's bottom edge, in framebuffer px) so the two never
+// overlap as the readout grows.
+func drawChannelUI(c *app.Ctx, top float32) {
 	ch := app.GetResource[Channel](c)
 	if ch == nil {
 		return
 	}
 	s := splitiui.Scale(c)
-	imgui.SetNextWindowPosV(imgui.Vec2{X: margin, Y: channelPanelY * s}, imgui.CondAlways, imgui.Vec2{})
+	imgui.SetNextWindowPosV(imgui.Vec2{X: margin, Y: top + margin*s}, imgui.CondAlways, imgui.Vec2{})
 	if imgui.BeginV("Channel", nil, hudWindowFlags|imgui.WindowFlagsAlwaysAutoResize) {
 		imgui.Checkbox("Multipath", &ch.Multipath)
 		if ch.Multipath {
@@ -61,29 +64,53 @@ func drawChannelUI(c *app.Ctx) {
 	imgui.End()
 }
 
-// channelPanelY is the logical y-offset of the Channel panel, clearing the link
-// readout above it.
-const channelPanelY = 150
-
 const hudWindowFlags = imgui.WindowFlagsNoResize | imgui.WindowFlagsNoMove |
 	imgui.WindowFlagsNoCollapse | imgui.WindowFlagsNoSavedSettings
 
-// drawReadoutUI is the top-left link-budget panel.
-func drawReadoutUI(link *Link, txd *TxDevice) {
+// drawReadoutUI is the top-left link-budget panel. It returns the panel's bottom
+// edge in framebuffer px so the Channel panel can sit just below it. The bit rates
+// are measured at the receiver — the throughput its own chain actually recovers — so
+// they reflect what this receiver demodulates, not how the far-end transmitter is
+// configured, and drop to zero when the link stops delivering.
+func drawReadoutUI(link *Link, txd *TxDevice, rxd *RxDevice) float32 {
 	freq, power := 24e6, 0.0
 	if txd != nil {
 		freq, power = txd.FreqHz, txd.PowerW
 	}
+	var coded, data, corr float64
+	ber := -1.0
+	hasFEC := false
+	if rxd != nil && rxd.Decode != nil {
+		coded, data = rxd.Decode.codedRate, rxd.Decode.dataRate
+		corr, ber = rxd.Decode.corrRate, rxd.Decode.berFrac()
+		if rxd.Graph != nil {
+			_, fec, _, _ := rxChain(rxd.Graph)
+			hasFEC = fec != nil
+		}
+	}
+	bottom := float32(margin)
 	imgui.SetNextWindowPosV(imgui.Vec2{X: margin, Y: margin}, imgui.CondAlways, imgui.Vec2{})
 	if imgui.BeginV("Receiver Link", nil, hudWindowFlags|imgui.WindowFlagsAlwaysAutoResize) {
 		imgui.TextUnformatted(fmt.Sprintf("Pr     %8.1f dBm", sim.DBm(link.PowerW)))
 		imgui.TextUnformatted(fmt.Sprintf("SNR    %8.1f dB", link.SNRdB))
+		imgui.TextUnformatted(fmt.Sprintf("EVM    %8s dB", evmStr(link.EVMdB)))
 		imgui.TextUnformatted(fmt.Sprintf("dist   %8.1f m", link.DistM))
 		imgui.TextUnformatted(fmt.Sprintf("freq   %8.0f MHz", freq/1e6))
 		imgui.TextUnformatted(fmt.Sprintf("lambda %8.1f m", sim.SpeedOfLight/freq))
 		imgui.TextUnformatted(fmt.Sprintf("Ptx    %8.1f dBm", sim.DBm(power)))
+		imgui.TextUnformatted(fmt.Sprintf("coded  %8.1f bit/s", coded))
+		imgui.TextUnformatted(fmt.Sprintf("data   %8.1f bit/s", data))
+		imgui.TextUnformatted(fmt.Sprintf("BER    %8s", berStr(ber)))
+		// The FEC repair rate is only meaningful when an Error-Correction node is wired
+		// in; without one there is nothing to correct, so omit the line entirely rather
+		// than imply a zero rate.
+		if hasFEC {
+			imgui.TextUnformatted(fmt.Sprintf("fixed  %8.1f err/s", corr))
+		}
+		bottom = imgui.WindowPos().Y + imgui.WindowSize().Y
 	}
 	imgui.End()
+	return bottom
 }
 
 // configDrawerW is the drawer width in logical units; it scales with the UI.
@@ -188,6 +215,24 @@ func drawConfigUI(c *app.Ctx, lab *Lab) {
 
 // dbmToW converts decibel-milliwatts to watts (inverse of sim.DBm).
 func dbmToW(dBm float64) float64 { return math.Pow(10, dBm/10) * 1e-3 }
+
+// evmStr formats the EVM-measured SNR, showing a dash when there is no measurement
+// yet (the receiver has not locked to a signal) or the value is otherwise non-finite.
+func evmStr(dB float64) string {
+	if math.IsInf(dB, 0) || math.IsNaN(dB) {
+		return "--"
+	}
+	return fmt.Sprintf("%.1f", dB)
+}
+
+// berStr formats the measured pre-FEC channel bit-error rate as a percentage,
+// showing a dash before the receiver has demodulated anything (berFrac returns < 0).
+func berStr(frac float64) string {
+	if frac < 0 {
+		return "--"
+	}
+	return fmt.Sprintf("%.2f%%", frac*100)
+}
 
 // markTxDirty flags a transmitter's playback for recompile after a parameter edit.
 func markTxDirty(txd *TxDevice) {

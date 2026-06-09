@@ -29,6 +29,11 @@ type Editor struct {
 	targetEnt ecs.Entity // the specific device entity whose graph is open
 
 	wireFrom int // node id a wire is being dragged from (output), 0 = none
+
+	// Palette drag-to-create: while palAdding is true a new node of palKind is being
+	// dragged out of the bottom palette, and is dropped onto the canvas on release.
+	palAdding bool
+	palKind   NodeKind
 }
 
 func newEditor() *Editor { return &Editor{} }

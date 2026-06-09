@@ -81,13 +81,3 @@ func TestLoSEndpointBeforeBlock(t *testing.T) {
 		t.Fatalf("path ending before the block should be clear: got %g", got)
 	}
 }
-
-// TestLoSPowerIsAmplitudeSquared keeps the power/amplitude relationship the link
-// budget relies on.
-func TestLoSPowerIsAmplitudeSquared(t *testing.T) {
-	a := losAmp(-30, 0, 30, 0, highFreq, []blockBox{box})
-	p := losPower(-30, 0, 30, 0, highFreq, []blockBox{box})
-	if d := p - a*a; d < -1e-12 || d > 1e-12 {
-		t.Fatalf("power should equal amplitude²: power=%g, amp²=%g", p, a*a)
-	}
-}

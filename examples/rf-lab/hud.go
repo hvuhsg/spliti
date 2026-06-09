@@ -63,7 +63,7 @@ func drawConstellations(c *app.Ctx, lab *Lab) {
 		}
 		// Only plot when the receiver is wired to a constellation — otherwise nothing
 		// demodulates the antenna and there is no scatter to show.
-		con, _ := rxChain(rxd.Graph)
+		con, _, _, _ := rxChain(rxd.Graph)
 		if con == nil {
 			return
 		}

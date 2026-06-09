@@ -95,13 +95,6 @@ func losAmp(ax, az, bx, bz, freqHz float64, blocks []blockBox) float64 {
 	return a
 }
 
-// losPower is losAmp expressed as a power transmission factor (amplitude²), for
-// the link budget.
-func losPower(ax, az, bx, bz, freqHz float64, blocks []blockBox) float64 {
-	a := losAmp(ax, az, bx, bz, freqHz, blocks)
-	return a * a
-}
-
 // edgeDiffraction returns the amplitude reaching b past one wall. With a clear line
 // of sight (the segment misses the footprint) it is 1. Where the footprint is
 // crossed, the wave lies in the wall's geometric shadow and reaches b only by

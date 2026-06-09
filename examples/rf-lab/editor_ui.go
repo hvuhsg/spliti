@@ -21,6 +21,10 @@ const (
 	edPortR   = 8
 	edOriginX = 40
 	edOriginY = 56
+
+	edPaletteH = 70 // height of the bottom node-palette strip, logical units
+	edCardW    = 116
+	edCardH    = 44
 )
 
 // edLayout converts logical editor coordinates to framebuffer pixels at the
@@ -92,6 +96,10 @@ func editorUI(c *app.Ctx) {
 	if g.Kind == GraphRx {
 		header = "RECEIVE CHAIN  -  decodes live while the transmitter sends"
 		bar = col(150, 255, 190, 255)
+	} else if play != nil {
+		// Live throughput, so cycling the modulation or FEC scheme shows its cost here.
+		coded, data := play.dataRate(g)
+		header += fmt.Sprintf("    -    data %.1f bit/s  (coded %.1f)", data, coded)
 	}
 	dl.AddRectFilled(imgui.Vec2{}, imgui.Vec2{X: float32(fbW), Y: 4 * s}, bar)
 	dl.AddTextVec2(imgui.Vec2{X: 16 * s, Y: 12 * s}, bar, header)
@@ -134,7 +142,17 @@ func editorUI(c *app.Ctx) {
 		ed.wireFrom = 0
 	}
 
-	editorToolbar(ui, ed, g, play, fbH, s)
+	editorPalette(dl, ui, ed, g, play, fbW, fbH, s)
+
+	// A palette card being dragged trails a ghost under the cursor; releasing over
+	// the canvas drops a new node there.
+	if ed.palAdding {
+		mp := imgui.MousePos()
+		drawPaletteCard(dl, imgui.Vec2{X: mp.X - edCardW*s/2, Y: mp.Y - edCardH*s/2}, edCardW*s, edCardH*s, ed.palKind, true, s)
+		if imgui.IsMouseReleased(0) {
+			dropPaletteNode(ed, lay, g, play, fbH)
+		}
+	}
 
 	imgui.End()
 }
@@ -188,6 +206,46 @@ func nodeBody(dl *imgui.DrawList, lay edLayout, g *Graph, play *Play, n *Node, p
 			dl.AddTextVec2(addv(pos, 12*s, lay.titleH+12*s), col(150, 200, 170, 255), "decoded:")
 			dl.AddTextVec2(addv(pos, 12*s, lay.titleH+36*s), white, clip(n.Text, 22))
 		}
+	case KindBits:
+		// Show the bit stream this node carries, taken from the Text node it is wired
+		// to: the message upstream in a TX chain, the live decoded text downstream in
+		// an RX chain. So you watch the bits the encoder emits / the decoder recovers.
+		label := "text → bits"
+		var src *Node
+		if g.Kind == GraphTx {
+			src = g.inputOf(n.ID)
+		} else {
+			label = "bits → text"
+			src = g.outputOf(n.ID)
+		}
+		dl.AddTextVec2(addv(pos, 12*s, lay.titleH+12*s), col(180, 160, 230, 255), label)
+		txt := ""
+		if src != nil && src.Kind == KindText {
+			txt = src.Text
+		}
+		b := textToBits(txt)
+		preview := bitsPreview(b, 2)
+		if preview == "" {
+			preview = "—"
+		} else if len(b) > 16 {
+			preview += " …"
+		}
+		dl.AddTextVec2(addv(pos, 12*s, lay.titleH+38*s), white, preview)
+	case KindErrorCorrect:
+		// Forward error correction: adds redundancy in TX, repairs errors in RX. The
+		// scheme cycles on the button (TX and RX must match); rate shows the overhead.
+		role := "add redundancy"
+		if g.Kind == GraphRx {
+			role = "correct errors"
+		}
+		dl.AddTextVec2(addv(pos, 12*s, lay.titleH+12*s), col(230, 150, 150, 255), role)
+		dl.AddTextVec2(addv(pos, 12*s, lay.titleH+36*s), white, "rate "+eccRate(n.Code))
+		imgui.SetCursorScreenPos(addv(pos, 12*s, lay.nodeH-32*s))
+		// Stable ### id so cycling the label doesn't change the button's identity.
+		if imgui.Button(eccName(n.Code) + "   >###cyc") {
+			n.Code = nextECC(n.Code)
+			markDirty(g, play)
+		}
 	case KindConstellation:
 		drawConstellationPreview(dl, n.Mod, pos, lay)
 		imgui.SetCursorScreenPos(addv(pos, 12*s, lay.nodeH-32*s))
@@ -225,24 +283,39 @@ func nodePorts(dl *imgui.DrawList, lay edLayout, ed *Editor, g *Graph, n *Node) 
 	}
 }
 
-// editorToolbar draws the bottom-left action bar.
-func editorToolbar(ui *UI, ed *Editor, g *Graph, play *Play, fbH int, s float32) {
-	imgui.SetCursorScreenPos(imgui.Vec2{X: 16 * s, Y: float32(fbH) - 44*s})
-	if imgui.Button("+ Text") {
-		n := g.add(KindText, 40, 40)
-		if g.Kind == GraphTx {
-			n.Text = "MSG"
-		} else {
-			n.Text = ""
+// paletteKinds lists the node kinds offered in the bottom palette for a chain.
+// Endpoints (Transmitter / Receiver) are fixed in the graph and not draggable.
+func paletteKinds() []NodeKind {
+	return []NodeKind{KindText, KindBits, KindErrorCorrect, KindConstellation}
+}
+
+// editorPalette draws the bottom strip: a row of draggable node cards on the left
+// (drag one onto the canvas to create it) and the plain action buttons on the
+// right. The cards are colored mini-nodes, deliberately distinct from the buttons.
+func editorPalette(dl *imgui.DrawList, ui *UI, ed *Editor, g *Graph, play *Play, fbW, fbH int, s float32) {
+	top := float32(fbH) - edPaletteH*s
+
+	// Strip background with a bright top border, so the palette reads as a tray.
+	dl.AddRectFilled(imgui.Vec2{X: 0, Y: top}, imgui.Vec2{X: float32(fbW), Y: float32(fbH)}, col(12, 14, 20, 240))
+	dl.AddRectFilled(imgui.Vec2{X: 0, Y: top}, imgui.Vec2{X: float32(fbW), Y: top + 2*s}, col(90, 100, 130, 255))
+	dl.AddTextVec2(imgui.Vec2{X: 16 * s, Y: top + 6*s}, col(150, 160, 180, 255), "NODES  -  drag onto the canvas")
+
+	cardW, cardH := edCardW*s, edCardH*s
+	y0 := top + 22*s
+	for i, k := range paletteKinds() {
+		cx := 16*s + float32(i)*(cardW+12*s)
+		p := imgui.Vec2{X: cx, Y: y0}
+		imgui.SetCursorScreenPos(p)
+		imgui.InvisibleButton(fmt.Sprintf("##pal%d", k), imgui.Vec2{X: cardW, Y: cardH})
+		if imgui.IsItemActivated() {
+			ed.palAdding, ed.palKind = true, k
 		}
-		markDirty(g, play)
+		drawPaletteCard(dl, p, cardW, cardH, k, imgui.IsItemHovered(), s)
 	}
-	imgui.SameLine()
-	if imgui.Button("+ Const") {
-		g.add(KindConstellation, 40, 240)
-		markDirty(g, play)
-	}
-	imgui.SameLine()
+
+	// Action buttons on the right — ordinary ImGui buttons, visually distinct from
+	// the colored draggable cards.
+	imgui.SetCursorScreenPos(imgui.Vec2{X: float32(fbW) - 196*s, Y: y0 + 4*s})
 	if g.Kind == GraphTx && play != nil {
 		label := "Play"
 		if play.Playing {
@@ -261,7 +334,41 @@ func editorToolbar(ui *UI, ed *Editor, g *Graph, play *Play, fbH int, s float32)
 	if imgui.Button("Close") {
 		ui.Mode = ModeExplore
 		ed.wireFrom = 0
+		ed.palAdding = false
 	}
+}
+
+// drawPaletteCard renders one colored mini-node card (a small node preview).
+func drawPaletteCard(dl *imgui.DrawList, p imgui.Vec2, w, h float32, k NodeKind, hover bool, s float32) {
+	_, c := kindTitle(k)
+	body := col(26, 28, 38, 245)
+	if hover {
+		body = col(40, 44, 58, 255)
+	}
+	dl.AddRectFilledV(p, addv(p, w, h), body, 4*s, imgui.DrawFlagsRoundCornersAll)
+	dl.AddRectFilledV(p, addv(p, w, 6*s), c, 4*s, imgui.DrawFlagsRoundCornersTop)
+	dl.AddTextVec2(addv(p, 10*s, 16*s), col(235, 240, 245, 255), palShort(k))
+}
+
+// dropPaletteNode creates the dragged palette node when the mouse is released over
+// the canvas (above the palette strip). The new node is centered on the cursor.
+func dropPaletteNode(ed *Editor, lay edLayout, g *Graph, play *Play, fbH int) {
+	mp := imgui.MousePos()
+	top := float32(fbH) - edPaletteH*lay.s
+	if mp.Y < top { // dropped on the canvas, not back on the palette
+		lx := (mp.X-lay.origin.X)/lay.s - edNodeW/2
+		ly := (mp.Y-lay.origin.Y)/lay.s - edNodeH/2
+		n := g.add(ed.palKind, lx, ly)
+		if ed.palKind == KindText {
+			if g.Kind == GraphTx {
+				n.Text = "MSG"
+			} else {
+				n.Text = ""
+			}
+		}
+		markDirty(g, play)
+	}
+	ed.palAdding = false
 }
 
 // --- geometry + drawing helpers ---
@@ -306,10 +413,18 @@ func drawConstellationPreview(dl *imgui.DrawList, mod sim.Modulation, pos imgui.
 }
 
 // nodeTitle returns a node's title-bar label and color.
-func nodeTitle(n *Node) (string, uint32) {
-	switch n.Kind {
+func nodeTitle(n *Node) (string, uint32) { return kindTitle(n.Kind) }
+
+// kindTitle returns the title-bar label and color for a node kind (shared by the
+// node header and the palette cards).
+func kindTitle(k NodeKind) (string, uint32) {
+	switch k {
 	case KindText:
 		return "TEXT", col(60, 130, 220, 255)
+	case KindBits:
+		return "BITS", col(150, 110, 220, 255)
+	case KindErrorCorrect:
+		return "ERROR CORRECTION", col(210, 90, 90, 255)
 	case KindConstellation:
 		return "CONSTELLATION", col(220, 160, 60, 255)
 	case KindTransmitter:
@@ -318,6 +433,21 @@ func nodeTitle(n *Node) (string, uint32) {
 		return "RECEIVER", col(70, 190, 120, 255)
 	}
 	return "NODE", col(120, 120, 130, 255)
+}
+
+// palShort is the compact label shown on a palette card.
+func palShort(k NodeKind) string {
+	switch k {
+	case KindText:
+		return "Text"
+	case KindBits:
+		return "Bits"
+	case KindErrorCorrect:
+		return "FEC"
+	case KindConstellation:
+		return "Const"
+	}
+	return "Node"
 }
 
 // col packs an 8-bit RGBA color into ImGui's IM_COL32 (R | G<<8 | B<<16 | A<<24).

@@ -198,14 +198,17 @@ func fieldSystem(c *app.Ctx) {
 	// Everything below samples the *wave* at the focused receiver — the actual
 	// superposition of every transmitter — rather than any single transmitter.
 	rxd, rxPos, okr := focusRx(c, lab)
+	link := app.GetResource[Link](c)
 	if !okr {
+		clearLinkSignal(link)
 		return
 	}
 
 	// Walk the receiver's wires up front. con is the constellation the antenna
-	// feeds; sink is the Text node the constellation feeds. Either is nil when its
-	// link is cut, and data flows only as far as the wires reach.
-	con, sink := rxChain(rxd.Graph)
+	// feeds; fec is the Error-Correction node downstream (nil if none); toText says
+	// whether a Bits node is; sink is the Text node at the end of the chain. Each is
+	// nil/false when its link is cut, and data flows only as far as the wires reach.
+	con, fec, toText, sink := rxChain(rxd.Graph)
 
 	// Any Text node that isn't the wired sink gets no data, so it shows nothing.
 	for _, n := range rxd.Graph.Nodes {
@@ -221,6 +224,7 @@ func fieldSystem(c *app.Ctx) {
 		if rxd.Decode != nil {
 			rxd.Decode.reset()
 		}
+		clearLinkSignal(link)
 		return
 	}
 
@@ -310,6 +314,7 @@ func fieldSystem(c *app.Ctx) {
 	// (so one source lands on its ideal point, several land between theirs) plus
 	// noise sized by the total received SNR.
 	if rxd.Decode == nil {
+		clearLinkSignal(link)
 		return
 	}
 
@@ -317,9 +322,12 @@ func fieldSystem(c *app.Ctx) {
 	if ampSum > 0 {
 		point = baseband / complex(ampSum, 0)
 	}
+	// Noise per complex sample, scaled to the actual symbol energy so the scatter's
+	// SNR equals the reported power SNR (totalPr/noiseFloor) for every modulation —
+	// which keeps the EVM measurement and the decoder's error rate honest.
 	sigma := 0.0
 	if totalPr > 0 && noiseFloorW > 0 {
-		sigma = math.Sqrt(noiseFloorW / (2 * totalPr))
+		sigma = math.Sqrt(avgSymbolPower(con.Mod) * noiseFloorW / (2 * totalPr))
 	}
 	recv := point + complex(rand.NormFloat64()*sigma, rand.NormFloat64()*sigma)
 	rxd.Decode.pushRx(recv)
@@ -332,14 +340,61 @@ func fieldSystem(c *app.Ctx) {
 		if te >= 0 {
 			arrIdx := int(te*clk.SymbolRate) % len(clk.Symbols)
 			rxd.Decode.step(arrIdx, recv, con.Mod)
+			// Measure SNR the way a real receiver does — from the spread of the received
+			// samples around the constellation point it decides on (EVM).
+			rxd.Decode.observeEVM(recv, con.Mod)
+			// Measure the pre-FEC channel BER by comparing the receiver's hard decision
+			// against the symbol the transmitter actually put on the air (its compiled
+			// symbols are the ground truth here). It is only meaningful when both ends
+			// pack the same number of bits per symbol; a modulation mismatch is its own
+			// visible failure, so leave the estimate untouched in that case.
+			if bitsPerSymbol(clk.Mod) == bitsPerSymbol(con.Mod) {
+				txVal := nearestSymbolValue(clk.Mod, clk.Symbols[arrIdx])
+				rxVal := nearestSymbolValue(con.Mod, recv)
+				rxd.Decode.observeBER(txVal, rxVal, bitsPerSymbol(con.Mod))
+			}
 		}
 	}
 
-	// The decoded message reaches the Text node only if the constellation is wired
-	// to it; a severed Constellation → Text link leaves the display blank.
+	// Render the raw demodulated bits through whatever stages the chain contains —
+	// Hamming correction if an Error-Correction node is wired in, ASCII decoding if a
+	// Bits node is — and show the result on the sink Text node. With no Bits node the
+	// chain stops at binary, so the readout is the bit stream itself.
+	disp := rxd.Decode.render(fec, toText)
+	// Measure throughput from the bits just recovered, timestamped by the sim clock,
+	// so the readout reflects the link actually delivering data rather than an assumed
+	// rate (it falls to zero within a window when nothing arrives).
+	rxd.Decode.measure(f.T)
 	if sink != nil {
-		sink.Text = rxd.Decode.text()
+		sink.Text = disp
 	}
+
+	// Publish the link readout from this same sampled wave, so the panel shows what
+	// the receiver actually experiences rather than a separate Friis calculation:
+	// PowerW is the real in-band received power (direct + multipath, all co-channel
+	// transmitters), SNRdB is that against the thermal floor, and EVMdB is the SNR
+	// measured from the constellation scatter. (Distance stays geometry, set by
+	// rfSystem.)
+	if link != nil {
+		link.PowerW = totalPr
+		if totalPr > 0 && noiseFloorW > 0 {
+			link.SNRdB = 10 * math.Log10(totalPr/noiseFloorW)
+		} else {
+			link.SNRdB = 0
+		}
+		link.EVMdB = rxd.Decode.evmSNRdB()
+	}
+}
+
+// clearLinkSignal zeroes the measured signal portion of the link readout — received
+// power and both SNR estimates — leaving the geometric distance (rfSystem's job)
+// alone. The field system calls it whenever there is no receiver or no demodulation
+// path, so a dead link reads zero instead of a stale value.
+func clearLinkSignal(link *Link) {
+	if link == nil {
+		return
+	}
+	link.PowerW, link.SNRdB, link.EVMdB = 0, 0, math.Inf(1)
 }
 
 // modSymbol returns the transmitted symbol at emission time te, or the

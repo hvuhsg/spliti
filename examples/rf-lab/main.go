@@ -86,11 +86,14 @@ type Lab struct {
 	Ent ecs.Entity // the selected marker entity (valid when Sel != SelNone)
 }
 
-// Link holds the per-frame link budget computed by rfSystem from the Lab state.
+// Link holds the per-frame link readout. The signal quantities are measured from
+// the sampled wave by fieldSystem (so they match what the decoder sees); only the
+// geometric distance is set by rfSystem.
 type Link struct {
-	PowerW float64 // received power, watts
-	SNRdB  float64 // signal-to-noise ratio, dB
-	DistM  float64 // Tx–Rx distance, meters
+	PowerW float64 // measured in-band received power, watts (direct + multipath)
+	SNRdB  float64 // SNR of that power against the thermal floor, dB (modeled)
+	EVMdB  float64 // SNR measured from the constellation scatter (EVM), dB; +Inf = none
+	DistM  float64 // Tx–Rx distance, meters (geometry)
 }
 
 // Channel holds the global propagation settings. With Multipath off the lab uses
