@@ -29,6 +29,58 @@ func SpawnMeshChild(c *app.Commands, parent ecs.Entity, t Transform3D, mesh, mat
 	})
 }
 
+// SpawnModel instantiates a loaded glTF Model as an entity tree under a single
+// synthetic root carrying rootTransform, so moving/scaling rootTransform moves
+// the whole model. Each glTF node becomes an entity with its local transform
+// parented into the hierarchy; every primitive on a node becomes a child entity
+// with MeshRenderer + MaterialRef. The renderer's propagateTransforms composes
+// the chain each frame.
+//
+// Queued via Commands like the other spawn helpers: the whole tree is built in
+// one deferred op so child Parent links reference live entity IDs.
+func SpawnModel(c *app.Commands, model *Model, rootTransform Transform3D) {
+	if model == nil {
+		return
+	}
+	c.Add(func(w *ecs.World) {
+		rootMap := generic.NewMap2[Transform3D, GlobalTransform](w)
+		nodeMap := generic.NewMap3[Transform3D, GlobalTransform, Parent](w)
+		primMap := generic.NewMap5[Transform3D, GlobalTransform, MeshRenderer, MaterialRef, Parent](w)
+		ident := func() *GlobalTransform { return &GlobalTransform{Matrix: m.Identity4()} }
+
+		rt := rootTransform
+		root := rootMap.NewWith(&rt, ident())
+
+		var spawnNode func(idx int, parent ecs.Entity)
+		spawnNode = func(idx int, parent ecs.Entity) {
+			if idx < 0 || idx >= len(model.Nodes) {
+				return
+			}
+			n := model.Nodes[idx]
+			t := n.Transform
+			p := Parent{Entity: parent}
+			e := nodeMap.NewWith(&t, ident(), &p)
+			for i, mesh := range n.MeshRefs {
+				mat := ""
+				if i < len(n.MatRefs) {
+					mat = n.MatRefs[i]
+				}
+				pt := NewTransform3D(m.Vec3{})
+				pp := Parent{Entity: e}
+				mr := MeshRenderer{Mesh: mesh}
+				ref := MaterialRef{Material: mat}
+				primMap.NewWith(&pt, ident(), &mr, &ref, &pp)
+			}
+			for _, child := range n.Children {
+				spawnNode(child, e)
+			}
+		}
+		for _, r := range model.Roots {
+			spawnNode(r, root)
+		}
+	})
+}
+
 // SpawnPointLight queues a point light at the given transform. The light's world
 // position is taken from its GlobalTransform each frame, so animating the
 // transform moves the light.

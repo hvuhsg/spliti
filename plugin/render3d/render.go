@@ -196,11 +196,25 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 	colorMap := generic.NewMap[InstanceColor](world)
 	transparentMap := generic.NewMap[Transparent](world)
 
+	// Build the frustum once per frame from the same view/projection the shader
+	// uses, then cull each entity by its world-space bounding sphere below.
+	cull := cam != nil
+	if cull {
+		g.viewFrustum = extractFrustum(cam.Projection().Mul(cam.View()))
+	}
+
 	g.items = g.items[:0]
 	g.tItems = g.tItems[:0]
 	app.Query2[MeshRenderer, GlobalTransform](c, func(e ecs.Entity, mr *MeshRenderer, gt *GlobalTransform) {
-		if meshes.get(mr.Mesh) == nil {
+		gm := meshes.get(mr.Mesh)
+		if gm == nil {
 			return // unknown mesh: skip
+		}
+		if cull {
+			center := transformPoint(gt.Matrix, gm.boundsCenter)
+			if !g.viewFrustum.sphereInside(center, gm.boundsRadius*maxAxisScale(gt.Matrix)) {
+				return // outside the view frustum: skip
+			}
 		}
 		mat := ""
 		if matRefMap.Has(e) {

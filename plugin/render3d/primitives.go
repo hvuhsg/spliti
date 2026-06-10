@@ -10,23 +10,31 @@ import (
 // triangles, per-vertex normals, and UVs. Load one into a MeshRegistry to draw
 // it. They are pure functions, unit-tested without a GPU.
 
-func vert(p, n m.Vec3, u, v float32) Vertex {
+func vert(p, n m.Vec3, u, v float32, tangent m.Vec4) Vertex {
 	return Vertex{
 		PX: p.X, PY: p.Y, PZ: p.Z,
 		NX: n.X, NY: n.Y, NZ: n.Z,
 		U: u, V: v,
+		TX: tangent.X, TY: tangent.Y, TZ: tangent.Z, TW: tangent.W,
 	}
 }
 
 // addQuad appends a flat quad (two triangles) with corners a,b,c,d in CCW order
-// as seen from the normal side, with UVs (0,0),(1,0),(1,1),(0,1).
+// as seen from the normal side, with UVs (0,0),(1,0),(1,1),(0,1). The tangent
+// (direction of increasing U) is the a->b edge; handedness is +1 since the
+// a->d edge (increasing V) and cross(normal, tangent) agree for this winding.
 func addQuad(mesh *Mesh, a, b, c, d, normal m.Vec3) {
+	tangent := m.Vec4{X: 0, Y: 0, Z: 0, W: 1}
+	if t := b.Sub(a); t.LengthSq() > 0 {
+		tn := t.Normalize()
+		tangent = m.Vec4{X: tn.X, Y: tn.Y, Z: tn.Z, W: 1}
+	}
 	base := uint32(len(mesh.Vertices))
 	mesh.Vertices = append(mesh.Vertices,
-		vert(a, normal, 0, 0),
-		vert(b, normal, 1, 0),
-		vert(c, normal, 1, 1),
-		vert(d, normal, 0, 1),
+		vert(a, normal, 0, 0, tangent),
+		vert(b, normal, 1, 0, tangent),
+		vert(c, normal, 1, 1, tangent),
+		vert(d, normal, 0, 1, tangent),
 	)
 	mesh.Indices = append(mesh.Indices, base, base+1, base+2, base, base+2, base+3)
 }
@@ -80,13 +88,16 @@ func Plane(width, depth float32, subX, subZ int) *Mesh {
 	}
 	mesh := &Mesh{}
 	normal := m.Vec3{Y: 1}
+	// U increases along +X, so the tangent is +X; +V is +Z and cross(+Y,+X) = -Z,
+	// matching a handedness of -1.
+	tangent := m.Vec4{X: 1, W: -1}
 	for iz := 0; iz <= subZ; iz++ {
 		fz := float32(iz) / float32(subZ)
 		z := -depth/2 + depth*fz
 		for ix := 0; ix <= subX; ix++ {
 			fx := float32(ix) / float32(subX)
 			x := -width/2 + width*fx
-			mesh.Vertices = append(mesh.Vertices, vert(m.Vec3{X: x, Z: z}, normal, fx, fz))
+			mesh.Vertices = append(mesh.Vertices, vert(m.Vec3{X: x, Z: z}, normal, fx, fz, tangent))
 		}
 	}
 	stride := subX + 1
@@ -127,7 +138,10 @@ func UVSphere(radius float32, sectors, stacks int) *Mesh {
 			pos := n.Scale(radius)
 			u := float32(j) / float32(sectors)
 			v := float32(i) / float32(stacks)
-			mesh.Vertices = append(mesh.Vertices, vert(pos, n, u, v))
+			// Tangent is dPos/dθ direction: d/dθ(cosθ, _, sinθ) = (-sinθ, 0, cosθ),
+			// the direction of increasing U (longitude). Handedness +1.
+			tangent := m.Vec4{X: -st, Y: 0, Z: ct, W: 1}
+			mesh.Vertices = append(mesh.Vertices, vert(pos, n, u, v, tangent))
 		}
 	}
 	stride := sectors + 1
