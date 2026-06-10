@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/webgpu"
 )
 
@@ -155,27 +155,27 @@ func bakeSamplingInfo(c *app.Ctx, ui *uiState) {
 func samplingInput(c *app.Ctx) {
 	ui := app.GetResource[uiState](c)
 	changed := false
-	for _, ev := range app.ReadEvents[webgpu.KeyEvent](c) {
-		if ev.Action != glfw.Press && ev.Action != glfw.Repeat {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press && ev.Action != inputs.Repeat {
 			continue
 		}
 		switch ev.Key {
-		case glfw.KeyRight:
+		case inputs.KeyRight:
 			if ui.smpNSym < smpMaxSym {
 				ui.smpNSym++
 				changed = true
 			}
-		case glfw.KeyLeft:
+		case inputs.KeyLeft:
 			if ui.smpNSym > 2 {
 				ui.smpNSym--
 				changed = true
 			}
-		case glfw.KeyUp:
+		case inputs.KeyUp:
 			if ui.smpSps < smpMaxSps {
 				ui.smpSps++
 				changed = true
 			}
-		case glfw.KeyDown:
+		case inputs.KeyDown:
 			if ui.smpSps > 1 {
 				ui.smpSps--
 				changed = true

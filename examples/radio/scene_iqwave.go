@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
-	"github.com/hvuhsg/spliti/plugin/webgpu"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 )
 
 // I/Q wave scene: how a constellation point becomes a wave. The point is spun at
@@ -86,14 +85,14 @@ func setupIQWave(c *app.Ctx) {
 
 func iqwaveInput(c *app.Ctx) {
 	ui := app.GetResource[uiState](c)
-	for _, ev := range app.ReadEvents[webgpu.KeyEvent](c) {
-		if ev.Action != glfw.Press && ev.Action != glfw.Repeat {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press && ev.Action != inputs.Repeat {
 			continue
 		}
 		switch ev.Key {
-		case glfw.KeyRight, glfw.KeyUp:
+		case inputs.KeyRight, inputs.KeyUp:
 			ui.sym = (ui.sym + 1) & 3
-		case glfw.KeyLeft, glfw.KeyDown:
+		case inputs.KeyLeft, inputs.KeyDown:
 			ui.sym = (ui.sym + 3) & 3
 		}
 	}

@@ -8,6 +8,7 @@ require (
 	github.com/gdamore/tcell/v2 v2.13.9
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20240506104042-037f3cc74f2a
 	github.com/mlange-42/arche v0.15.3
+	github.com/qmuntal/gltf v0.28.0
 	golang.org/x/image v0.34.0
 )
 

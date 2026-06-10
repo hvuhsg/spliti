@@ -1,11 +1,13 @@
+//go:build !js
+
 package main
 
 import (
 	"math"
 
 	"github.com/AllenDang/cimgui-go/imgui"
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
@@ -65,8 +67,7 @@ func controlsSystem(c *app.Ctx) {
 	ctl := app.GetResource[CamCtl](c)
 	lab := app.GetResource[Lab](c)
 	tm := app.GetResource[splititime.Time](c)
-	win := render3d.Window(c)
-	if cam == nil || ctl == nil || lab == nil || win == nil || tm == nil {
+	if cam == nil || ctl == nil || lab == nil || tm == nil {
 		return
 	}
 	dt := float32(tm.Delta().Seconds())
@@ -86,22 +87,22 @@ func controlsSystem(c *app.Ctx) {
 	flat := m.Vec3{X: fwd.X, Z: fwd.Z}.Normalize()
 	right := flat.Cross(m.Vec3{Y: 1}).Normalize()
 	var move m.Vec3
-	if down(win, glfw.KeyW) {
+	if render3d.KeyDown(c, inputs.KeyW) {
 		move = move.Add(flat)
 	}
-	if down(win, glfw.KeyS) {
+	if render3d.KeyDown(c, inputs.KeyS) {
 		move = move.Sub(flat)
 	}
-	if down(win, glfw.KeyD) {
+	if render3d.KeyDown(c, inputs.KeyD) {
 		move = move.Add(right)
 	}
-	if down(win, glfw.KeyA) {
+	if render3d.KeyDown(c, inputs.KeyA) {
 		move = move.Sub(right)
 	}
-	if down(win, glfw.KeyE) {
+	if render3d.KeyDown(c, inputs.KeyE) {
 		move = move.Add(m.Vec3{Y: 1})
 	}
-	if down(win, glfw.KeyQ) {
+	if render3d.KeyDown(c, inputs.KeyQ) {
 		move = move.Sub(m.Vec3{Y: 1})
 	}
 	if move != (m.Vec3{}) {
@@ -123,15 +124,15 @@ func handleButtons(c *app.Ctx, ctl *CamCtl, lab *Lab) {
 	txMap := generic.NewMap[txTag](c.World())
 	rxMap := generic.NewMap[rxTag](c.World())
 	blockMap := generic.NewMap[blockTag](c.World())
-	for _, ev := range app.ReadEvents[render3d.MouseButtonEvent](c) {
+	for _, ev := range app.ReadEvents[inputs.MouseButtonEvent](c) {
 		switch ev.Button {
-		case glfw.MouseButtonRight:
-			ctl.looking = ev.Action == glfw.Press
+		case inputs.MouseButtonRight:
+			ctl.looking = ev.Action == inputs.Press
 			ctl.haveLast = false
-		case glfw.MouseButtonLeft:
+		case inputs.MouseButtonLeft:
 			// Left-release (drop/trash) is finalized centrally in finalizeDrop, which
 			// also catches releases over the toolbar that ImGui would otherwise eat.
-			if ev.Action == glfw.Release {
+			if ev.Action == inputs.Release {
 				continue
 			}
 			origin, dir := render3d.ScreenToRay(c, ev.X, ev.Y)
@@ -157,11 +158,10 @@ func handleButtons(c *app.Ctx, ctl *CamCtl, lab *Lab) {
 // entity if dropped on the toolbar, otherwise leaves it where it was dragged.
 func finalizeDrop(c *app.Ctx, ctl *CamCtl, lab *Lab) {
 	dd := app.GetResource[DragDrop](c)
-	win := render3d.Window(c)
-	if dd == nil || win == nil || (!dd.placing && !ctl.dragging) {
+	if dd == nil || (!dd.placing && !ctl.dragging) {
 		return
 	}
-	if win.GetMouseButton(glfw.MouseButtonLeft) == glfw.Press {
+	if render3d.MouseButtonDown(c, inputs.MouseButtonLeft) {
 		return // still held — keep dragging
 	}
 	mp := imgui.MousePos()
@@ -169,7 +169,7 @@ func finalizeDrop(c *app.Ctx, ctl *CamCtl, lab *Lab) {
 	switch {
 	case dd.placing:
 		if !overBar {
-			x, y := win.GetCursorPos()
+			x, y := render3d.CursorPos(c)
 			placeNew(c, lab, dd.kind, x, y)
 		}
 		dd.placing, dd.kind = false, SelNone
@@ -185,20 +185,20 @@ func finalizeDrop(c *app.Ctx, ctl *CamCtl, lab *Lab) {
 // receiver (the new one is selected), and Delete/Backspace removes the current
 // selection along with its mast.
 func handleDeviceKeys(c *app.Ctx, lab *Lab) {
-	for _, ev := range app.ReadEvents[render3d.KeyEvent](c) {
-		if ev.Action != glfw.Press {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press {
 			continue
 		}
 		switch ev.Key {
-		case glfw.KeyT:
+		case inputs.KeyT:
 			spawnTx(c.Commands(), spawnSpot[txTag](c, -30), lab, true)
-		case glfw.KeyR:
+		case inputs.KeyR:
 			spawnRx(c.Commands(), spawnSpot[rxTag](c, 30), lab, true)
-		case glfw.KeyB:
+		case inputs.KeyB:
 			pos := spawnSpot[blockTag](c, 0)
 			pos.Y = blockH / 2
 			spawnBlock(c.Commands(), pos, lab, true)
-		case glfw.KeyDelete, glfw.KeyBackspace:
+		case inputs.KeyDelete, inputs.KeyBackspace:
 			removeSelected(c, lab)
 		}
 	}
@@ -234,7 +234,7 @@ func removeSelected(c *app.Ctx, lab *Lab) {
 // handleLook accumulates yaw/pitch from cursor motion while the right button is
 // held.
 func handleLook(c *app.Ctx, ctl *CamCtl) {
-	for _, ev := range app.ReadEvents[render3d.MouseMoveEvent](c) {
+	for _, ev := range app.ReadEvents[inputs.MouseMoveEvent](c) {
 		if !ctl.looking || !ctl.haveLast {
 			ctl.lastX, ctl.lastY = ev.X, ev.Y
 			ctl.haveLast = true
@@ -253,8 +253,7 @@ func handleLook(c *app.Ctx, ctl *CamCtl) {
 // dragMarker moves the selected marker to where the cursor ray meets the marker-
 // height plane, clamped to the ground, by writing its transform.
 func dragMarker(c *app.Ctx, lab *Lab) {
-	win := render3d.Window(c)
-	if win == nil || lab.Ent.IsZero() {
+	if lab.Ent.IsZero() {
 		return
 	}
 	tmap := generic.NewMap[render3d.Transform3D](c.World())
@@ -270,7 +269,7 @@ func dragMarker(c *app.Ctx, lab *Lab) {
 		groundY = tr.Scale.Y / 2
 	}
 
-	x, y := win.GetCursorPos()
+	x, y := render3d.CursorPos(c)
 	origin, dir := render3d.ScreenToRay(c, x, y)
 	hit, ok := rayPlaneY(origin, dir, groundY)
 	if !ok {
@@ -297,8 +296,6 @@ func applyHighlight(c *app.Ctx, lab *Lab) {
 }
 
 // --- small helpers ---
-
-func down(win *glfw.Window, key glfw.Key) bool { return win.GetKey(key) == glfw.Press }
 
 func pick(cond bool, a, b string) string {
 	if cond {

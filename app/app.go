@@ -140,33 +140,41 @@ func (a *App) Run() {
 	a.fireInitialOnEnter()
 
 	a.running = true
-	for a.running {
-		a.runStage(schedule.First)
-		a.runStage(schedule.PreUpdate)
+	a.driveLoop()
+}
 
-		a.applyStateTransitions()
-		a.runStage(schedule.StateTransition)
+// step runs exactly one frame: every main stage in order, then the per-frame
+// event/change drains and the time plugin's pacing hooks. It is the body of the
+// run loop, factored out so the platform-specific driver (a blocking for-loop on
+// native, a requestAnimationFrame callback on js/wasm) can invoke it. It returns
+// false once the app should stop (Stop was called or MaxFrames was reached).
+func (a *App) step() bool {
+	a.runStage(schedule.First)
+	a.runStage(schedule.PreUpdate)
 
-		if a.preUpdateHook != nil {
-			a.preUpdateHook()
-		}
+	a.applyStateTransitions()
+	a.runStage(schedule.StateTransition)
 
-		a.runStage(schedule.Update)
-		a.runStage(schedule.PostUpdate)
-		a.runStage(schedule.Last)
-
-		a.drainAllEvents()
-		a.drainAllChanges()
-
-		if a.postUpdateHook != nil {
-			a.postUpdateHook()
-		}
-
-		a.frame++
-		if a.maxFrames > 0 && a.frame >= a.maxFrames {
-			a.running = false
-		}
+	if a.preUpdateHook != nil {
+		a.preUpdateHook()
 	}
+
+	a.runStage(schedule.Update)
+	a.runStage(schedule.PostUpdate)
+	a.runStage(schedule.Last)
+
+	a.drainAllEvents()
+	a.drainAllChanges()
+
+	if a.postUpdateHook != nil {
+		a.postUpdateHook()
+	}
+
+	a.frame++
+	if a.maxFrames > 0 && a.frame >= a.maxFrames {
+		a.running = false
+	}
+	return a.running
 }
 
 func (a *App) resolveAll() {

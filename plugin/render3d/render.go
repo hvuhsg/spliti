@@ -196,11 +196,25 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 	colorMap := generic.NewMap[InstanceColor](world)
 	transparentMap := generic.NewMap[Transparent](world)
 
+	// Build the frustum once per frame from the same view/projection the shader
+	// uses, then cull each entity by its world-space bounding sphere below.
+	cull := cam != nil
+	if cull {
+		g.viewFrustum = extractFrustum(cam.Projection().Mul(cam.View()))
+	}
+
 	g.items = g.items[:0]
 	g.tItems = g.tItems[:0]
 	app.Query2[MeshRenderer, GlobalTransform](c, func(e ecs.Entity, mr *MeshRenderer, gt *GlobalTransform) {
-		if meshes.get(mr.Mesh) == nil {
+		gm := meshes.get(mr.Mesh)
+		if gm == nil {
 			return // unknown mesh: skip
+		}
+		if cull {
+			center := transformPoint(gt.Matrix, gm.boundsCenter)
+			if !g.viewFrustum.sphereInside(center, gm.boundsRadius*maxAxisScale(gt.Matrix)) {
+				return // outside the view frustum: skip
+			}
 		}
 		mat := ""
 		if matRefMap.Has(e) {
@@ -255,12 +269,12 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 		off := uint64(b.start * instanceStride)
 		size := uint64(b.count * instanceStride)
 		pass.SetBindGroup(1, mat.bindGroup, nil)
-		pass.SetVertexBuffer(0, gm.vbuf, 0, gm.vbuf.GetSize())
+		pass.SetVertexBuffer(0, gm.vbuf, 0, gm.vbufSize)
 		// The instance buffer binding is already offset to this batch's start, so
 		// firstInstance is 0 (not b.start) — otherwise the base instance would be
 		// counted twice and read past the bound range.
 		pass.SetVertexBuffer(1, g.instanceBuf, off, size)
-		pass.SetIndexBuffer(gm.ibuf, wgpu.IndexFormatUint32, 0, gm.ibuf.GetSize())
+		pass.SetIndexBuffer(gm.ibuf, wgpu.IndexFormatUint32, 0, gm.ibufSize)
 		pass.DrawIndexed(gm.indexCount, uint32(b.count), 0, 0, 0)
 	}
 
@@ -276,9 +290,9 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 			mat := materials.get(it.material)
 			off := uint64((opaqueCount + i) * instanceStride)
 			pass.SetBindGroup(1, mat.bindGroup, nil)
-			pass.SetVertexBuffer(0, gm.vbuf, 0, gm.vbuf.GetSize())
+			pass.SetVertexBuffer(0, gm.vbuf, 0, gm.vbufSize)
 			pass.SetVertexBuffer(1, g.instanceBuf, off, uint64(instanceStride))
-			pass.SetIndexBuffer(gm.ibuf, wgpu.IndexFormatUint32, 0, gm.ibuf.GetSize())
+			pass.SetIndexBuffer(gm.ibuf, wgpu.IndexFormatUint32, 0, gm.ibufSize)
 			pass.DrawIndexed(gm.indexCount, 1, 0, 0, 0)
 		}
 	}
@@ -334,7 +348,7 @@ func presentSystem(c *app.Ctx) {
 		g.frameActive = false
 	}()
 
-	_ = g.curPass.End()
+	g.curPass.End()
 
 	// Frame read-back: record a copy of the surface texture (still valid
 	// pre-Present) into this frame's encoder, then deliver it after submit.

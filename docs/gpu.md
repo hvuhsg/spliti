@@ -4,11 +4,30 @@ The `webgpu` plugin is a second render backend: it opens a real window and draws
 
 Crucially, `webgpu` is a *library*, not a framework: spliti keeps owning `app.Run()` and the schedule. The plugin only installs a `GPU` resource at `Build` and three systems — input poll in `First`, render and present in `PostUpdate`. The shape mirrors `tui` exactly, just targeting a window instead of a terminal.
 
-> **Build requirement.** This backend links a bundled `wgpu-native` static library and uses GLFW (a cgo binding), so it builds only with `CGO_ENABLED=1` and a C toolchain (on macOS, the Xcode command-line tools). Importing `plugin/webgpu` is what pulls in the native deps — the terminal backend stays pure Go.
+> **Build targets.** This backend runs two ways. On **native desktop** it links a bundled `wgpu-native` static library and uses GLFW (a cgo binding), so it needs `CGO_ENABLED=1` and a C toolchain (on macOS, the Xcode command-line tools). In the **browser** it targets `GOOS=js GOARCH=wasm` (no cgo), driving the page's native WebGPU through the same `wgpu` API and reading input from the DOM. The platform-specific window/surface/input lives in `webgpu_native.go` / `webgpu_js.go`; everything else is shared. The terminal backend stays pure Go.
 
 ```bash
+# native window
 CGO_ENABLED=1 go run github.com/hvuhsg/spliti/examples/gpu-demo
+
+# browser (WebGPU-capable browser required)
+scripts/build-wasm.sh && go run ./cmd/webserve   # open http://localhost:8080/?demo=gpu-demo
 ```
+
+Input is reported as backend-agnostic [`plugin/inputs`](../plugin/inputs) events (`inputs.KeyEvent`, `inputs.MouseButtonEvent`, …) with neutral key/button constants, so game code is identical on native and in the browser.
+
+> **Browser harness requirements.** The page that loads the `.wasm` must do two
+> things (the bundled `web/index.html` already does both):
+>
+> 1. Expose the instance as `globalThis.wasm = result` after instantiation —
+>    cogentcore/webgpu's js backend reads the wasm memory through it.
+> 2. Install the detached-`ArrayBuffer` shim before `go.run`. The library builds a
+>    `Uint8ClampedArray` over Go's linear memory for queue writes; when Go grows
+>    (and detaches) that memory mid-write the construct throws. The shim wraps the
+>    `Uint8ClampedArray` constructor and retargets a detached buffer to the live
+>    `globalThis.wasm.instance.exports.mem.buffer` at the same offset (growth
+>    preserves contents). Copy the snippet from `web/index.html` into any custom
+>    harness, or this will crash intermittently under memory growth.
 
 ## Wiring it up
 
@@ -138,41 +157,42 @@ A pixel-default camera auto-refits on window resize (one unit stays one pixel). 
 
 ## Input
 
-GLFW input is tcell-free and emitted from the `First`-stage poll system. The poll runs `glfw.PollEvents()` (which fires the buffered callbacks), forwards key events, applies any pending resize, and — on a window-close request — sends a `CloseEvent` and calls `App.Stop()`.
+Input is emitted from the `First`-stage poll system as backend-agnostic [`plugin/inputs`](../plugin/inputs) events — the same types whether the platform source is GLFW (native) or the DOM (browser). On native the poll runs `glfw.PollEvents()` (firing the buffered callbacks), applies any pending resize, forwards events, and on a window-close request sends a `CloseEvent` and calls `App.Stop()`. In the browser the events arrive asynchronously from DOM listeners and the poll just drains them.
 
 ```go
+// plugin/inputs
 type KeyEvent struct {
-    Key    glfw.Key       // set on press/release/repeat; 0 for typed text
-    Rune   rune           // set for typed text (char callback); 0 for key events
-    Action glfw.Action    // glfw.Press / Release / Repeat
-    Mods   glfw.ModifierKey
+    Key    inputs.Key     // set on press/release/repeat; 0 for typed text
+    Rune   rune           // set for typed text; 0 for key events
+    Action inputs.Action  // inputs.Press / Release / Repeat
+    Mods   inputs.Mod
 }
 
-type CloseEvent struct{} // window close button pressed
+type CloseEvent struct{} // window/tab close requested
 ```
 
-Two callbacks feed `KeyEvent`, mirroring GLFW: the key callback fills `Key`/`Action`/`Mods` (with `Rune == 0`), and the char callback fills `Rune` (with `Action == glfw.Press`). Check `Key` for control/arrow keys, `Rune` for typed characters.
+Two sources feed `KeyEvent`, mirroring GLFW's split: key press/release/repeat fills `Key`/`Action`/`Mods` (with `Rune == 0`), and typed text fills `Rune` (with `Action == inputs.Press`). Check `Key` for control/arrow keys, `Rune` for typed characters. The neutral key/button constants (`inputs.KeyEscape`, `inputs.MouseButtonLeft`, …) mirror GLFW's values.
 
 ```go
-import "github.com/go-gl/glfw/v3.3/glfw"
+import "github.com/hvuhsg/spliti/plugin/inputs"
 
 func handleInput(c *app.Ctx) {
-    for _, ev := range app.ReadEvents[webgpu.KeyEvent](c) {
-        if ev.Key == glfw.KeyEscape && ev.Action == glfw.Press {
+    for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+        if ev.Key == inputs.KeyEscape && ev.Action == inputs.Press {
             c.App().Stop()
         }
     }
 }
 ```
 
-The window close button already calls `App.Stop()` for you; read `CloseEvent` only if you want to react first (save state, confirm, etc.).
+The close request already calls `App.Stop()` for you; read `CloseEvent` only if you want to react first (save state, confirm, etc.).
 
-> **glfw v3.3, not v3.4.** `wgpuglfw` (the surface bridge) pins glfw v3.3 on darwin, so the window type must match. Import `github.com/go-gl/glfw/v3.3/glfw` in your game when you reference `glfw.Key*` constants.
+> **Native-only window polling.** `webgpu.Window(c)` returns the `*glfw.Window` for direct GLFW polling (e.g. `win.GetKey(...)`); it exists only in native builds. Code that uses it won't compile for `js/wasm` — prefer the `inputs` events for portable input.
 
 ## A complete GPU frame, end to end
 
 ```
-First:                  time tick; __webgpu_input → glfw.PollEvents,
+First:                  time tick; __webgpu_input → poll/drain platform input,
                         resize handling, KeyEvent/CloseEvent, Stop-on-close
 PreUpdate:              (network capture, if network.Plugin loaded)
 StateTransition:        applyStateTransitions → OnExit/OnEnter systems
@@ -184,7 +204,8 @@ PostUpdate:
   __webgpu_present      end pass, submit, present
 Last:                   anything genuinely last
 [engine drains all Events[T] buffers]
-[time post-update hook] frame pacing sleep
+[time post-update hook] frame pacing sleep (native; in the browser the
+                        requestAnimationFrame loop paces frames instead)
 ```
 
 That's the canonical GPU-game frame — structurally identical to the terminal frame in [tui-and-input.md](tui-and-input.md), with the terminal cells swapped for a GPU surface.
@@ -192,9 +213,18 @@ That's the canonical GPU-game frame — structurally identical to the terminal f
 ## Convenience accessors
 
 ```go
-win := webgpu.Window(c) // *glfw.Window, or nil before Build finished
-w, h := webgpu.Size(c)  // current framebuffer size in pixels (0,0 if not ready)
+w, h := webgpu.Size(c)        // framebuffer size in pixels (== native GetFramebufferSize)
+w, h := webgpu.WindowSize(c)   // logical/CSS size (== native GetSize); mouse-coord space
+x, y := webgpu.CursorPos(c)    // latest cursor position, window coords
+down := webgpu.KeyDown(c, inputs.KeyW) // held-key polling (portable; works in the browser)
+
+win := webgpu.Window(c)        // *glfw.Window — native builds only (see Input note)
 ```
+
+`Size`, `WindowSize`, `CursorPos`, and `KeyDown` are the portable replacements for
+the native window's `GetFramebufferSize`/`GetSize`/`GetCursorPos`/`GetKey`, so a
+game that uses them (instead of `Window`) compiles and runs both natively and in
+the browser. `render3d` exposes the same four.
 
 ## Next
 

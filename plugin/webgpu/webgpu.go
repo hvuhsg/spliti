@@ -12,26 +12,24 @@
 // Sprite.Ref names a texture uploaded into the TextureRegistry resource, e.g.
 // from a Startup system. Components here are deliberately tcell-free.
 //
-// Build requirements: this backend uses cogentcore/webgpu (links a bundled
-// wgpu-native static library) and go-gl/glfw (a cgo window binding), so it
-// builds only with CGO_ENABLED=1 and a C toolchain (on macOS, the Xcode
-// command-line tools). The terminal backend stays pure Go — importing this
-// package is what pulls in the native deps.
+// Build targets: this backend runs on native desktop and in the browser. On
+// native (CGO_ENABLED=1, a C toolchain) it links cogentcore/webgpu's bundled
+// wgpu-native static library and uses go-gl/glfw for the window and input; that
+// path lives in webgpu_native.go. Under GOOS=js GOARCH=wasm it drives the
+// browser's native WebGPU through the same cogentcore/webgpu API and reads input
+// from the DOM; that path lives in webgpu_js.go. The platform-neutral GPU setup,
+// rendering, and resource management are shared in this and the other untagged
+// files. Either way, importing this package is what pulls in the GPU deps — the
+// terminal backend stays pure Go.
 //
-// Threading: GLFW window and event calls must run on the OS thread that called
-// glfw.Init. Build calls runtime.LockOSThread, and both AddPlugins (which runs
-// Build) and Run must execute on the same (main) goroutine — the normal spliti
-// usage. The demo's main package also calls runtime.LockOSThread in init() to
-// make the requirement explicit.
+// Input is reported as backend-agnostic plugin/inputs events, so game code is
+// identical across native and browser.
 package webgpu
 
 import (
-	"runtime"
-
 	"github.com/cogentcore/webgpu/wgpu"
-	"github.com/cogentcore/webgpu/wgpuglfw"
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 )
 
 // Plugin installs the GPU window, renderer, and input poll.
@@ -73,7 +71,10 @@ type Plugin struct {
 // GPU is the shared rendering resource. Systems read it via
 // app.GetResource[GPU]. All fields are owned by the plugin; treat as opaque.
 type GPU struct {
-	window   *glfw.Window
+	// plat holds platform-specific handles (the GLFW window on native, the
+	// canvas + DOM callbacks on js). Its layout is defined per build tag.
+	plat platform
+
 	instance *wgpu.Instance
 	adapter  *wgpu.Adapter
 	surface  *wgpu.Surface
@@ -97,6 +98,7 @@ type GPU struct {
 	smooth bool
 
 	quadBuf     *wgpu.Buffer
+	quadBufSize uint64 // byte size of quadBuf, tracked for portable SetVertexBuffer
 	instanceBuf *wgpu.Buffer
 	instanceCap int // capacity of instanceBuf, in instances
 
@@ -119,11 +121,17 @@ type GPU struct {
 	pendingW, pendingH int
 	resized            bool
 
-	// Input buffers filled by GLFW callbacks during PollEvents and drained by
-	// the input system in the same (main) goroutine — no locking needed.
-	keyEvents   []KeyEvent
-	mouseButton []MouseButtonEvent
-	mouseMove   []MouseMoveEvent
+	// Input buffers filled by the platform callbacks (GLFW on native, DOM on js)
+	// and drained by the input system in the same (main) goroutine — no locking
+	// needed.
+	keyEvents   []inputs.KeyEvent
+	mouseButton []inputs.MouseButtonEvent
+	mouseMove   []inputs.MouseMoveEvent
+
+	// keysDown tracks currently-held keys, updated from key events as they drain,
+	// so games can poll held state (KeyDown) portably instead of the native-only
+	// GLFW window.
+	keysDown map[inputs.Key]bool
 
 	// cursorX, cursorY track the latest cursor position (window coords) so a
 	// button event can be stamped with where the click landed.
@@ -145,36 +153,32 @@ type GPU struct {
 	frameActive bool
 }
 
-// Build implements app.Plugin.
-func (p Plugin) Build(a *app.App) {
-	runtime.LockOSThread()
-
-	width, height := p.Width, p.Height
+// sizeDefaults returns the plugin's window size and title with zero values
+// replaced by defaults. The platform Build uses it before creating the
+// window/canvas.
+func (p Plugin) sizeDefaults() (width, height int, title string) {
+	width, height = p.Width, p.Height
 	if width <= 0 {
 		width = 800
 	}
 	if height <= 0 {
 		height = 600
 	}
-	title := p.Title
+	title = p.Title
 	if title == "" {
 		title = "spliti"
 	}
+	return width, height, title
+}
 
-	if err := glfw.Init(); err != nil {
-		panic("webgpu: glfw init: " + err.Error())
-	}
-	glfw.WindowHint(glfw.ClientAPI, glfw.NoAPI) // wgpu owns the surface, not GL
-	glfw.WindowHint(glfw.Resizable, glfw.True)
-	win, err := glfw.CreateWindow(width, height, title, nil, nil)
-	if err != nil {
-		glfw.Terminate()
-		panic("webgpu: create window: " + err.Error())
-	}
-
-	instance := wgpu.CreateInstance(nil)
-	surface := instance.CreateSurface(wgpuglfw.GetSurfaceDescriptor(win))
-
+// finishBuild performs the platform-neutral setup shared by the native and js
+// Build paths: it requests the adapter/device/queue, configures the surface at
+// the given framebuffer pixel size, builds the pipeline and MSAA target, sets up
+// the camera and texture registry, inserts the resources, and installs the
+// render/input systems. The caller has already created the instance and surface
+// (from a GLFW window or an HTML canvas) and must fill g.plat and wire the
+// platform input callbacks after this returns.
+func finishBuild(p Plugin, a *app.App, instance *wgpu.Instance, surface *wgpu.Surface, fbw, fbh int) *GPU {
 	adapter, err := instance.RequestAdapter(&wgpu.RequestAdapterOptions{
 		CompatibleSurface: surface,
 	})
@@ -187,10 +191,6 @@ func (p Plugin) Build(a *app.App) {
 	}
 	queue := device.GetQueue()
 
-	// Configure the surface at the real framebuffer size in pixels — on HiDPI
-	// this is larger than the window's screen-coordinate size, giving crisp
-	// rendering at native resolution.
-	fbw, fbh := win.GetFramebufferSize()
 	caps := surface.GetCapabilities(adapter)
 	present := wgpu.PresentModeFifo
 	if !p.VSync && containsPresentMode(caps.PresentModes, wgpu.PresentModeImmediate) {
@@ -207,7 +207,6 @@ func (p Plugin) Build(a *app.App) {
 	surface.Configure(adapter, device, config)
 
 	g := &GPU{
-		window:   win,
 		instance: instance,
 		adapter:  adapter,
 		surface:  surface,
@@ -239,6 +238,8 @@ func (p Plugin) Build(a *app.App) {
 	}
 	writeCamera(g, cam)
 
+	g.keysDown = make(map[inputs.Key]bool)
+
 	registry := newTextureRegistry(g)
 	g.registry = registry
 
@@ -246,31 +247,10 @@ func (p Plugin) Build(a *app.App) {
 	app.InsertResource(a, cam)
 	app.InsertResource(a, registry)
 
-	// GLFW callbacks run on the main thread during PollEvents (in the input
-	// system), so appending here races nothing.
-	win.SetFramebufferSizeCallback(func(_ *glfw.Window, w, h int) {
-		g.pendingW, g.pendingH = w, h
-		g.resized = true
-	})
-	win.SetKeyCallback(func(_ *glfw.Window, key glfw.Key, _ int, action glfw.Action, mods glfw.ModifierKey) {
-		g.keyEvents = append(g.keyEvents, KeyEvent{Key: key, Action: action, Mods: mods})
-	})
-	win.SetCharCallback(func(_ *glfw.Window, r rune) {
-		g.keyEvents = append(g.keyEvents, KeyEvent{Rune: r, Action: glfw.Press})
-	})
-	win.SetCursorPosCallback(func(_ *glfw.Window, xpos, ypos float64) {
-		g.cursorX, g.cursorY = xpos, ypos
-		g.mouseMove = append(g.mouseMove, MouseMoveEvent{X: xpos, Y: ypos})
-	})
-	win.SetMouseButtonCallback(func(_ *glfw.Window, button glfw.MouseButton, action glfw.Action, mods glfw.ModifierKey) {
-		g.mouseButton = append(g.mouseButton, MouseButtonEvent{
-			Button: button, Action: action, Mods: mods, X: g.cursorX, Y: g.cursorY,
-		})
-	})
-
 	a.AddOnExit(func() { releaseGPU(g) })
 
 	installSystems(a)
+	return g
 }
 
 // containsPresentMode reports whether mode is supported by the surface.
@@ -289,8 +269,9 @@ func writeCamera(g *GPU, cam *Camera) {
 	_ = g.queue.WriteBuffer(g.cameraBuf, 0, wgpu.ToBytes(m[:]))
 }
 
-// releaseGPU tears down every GPU object in reverse dependency order and shuts
-// GLFW down. Safe to call once on exit (including on panic via AddOnExit).
+// releaseGPU tears down every GPU object in reverse dependency order, then hands
+// off to platformShutdown for window/DOM teardown. Safe to call once on exit
+// (including on panic via AddOnExit).
 func releaseGPU(g *GPU) {
 	g.registry.releaseAll()
 	if g.msaaView != nil {
@@ -338,28 +319,49 @@ func releaseGPU(g *GPU) {
 	if g.instance != nil {
 		g.instance.Release()
 	}
-	if g.window != nil {
-		g.window.Destroy()
-	}
-	glfw.Terminate()
-}
-
-// Window returns the GLFW window, or nil before Build. Convenience for systems
-// that need direct window access.
-func Window(c *app.Ctx) *glfw.Window {
-	g := app.GetResource[GPU](c)
-	if g == nil {
-		return nil
-	}
-	return g.window
+	g.platformShutdown()
 }
 
 // Size returns the current framebuffer size in pixels, or 0,0 if the GPU
-// resource is not ready.
+// resource is not ready. This is the native GetFramebufferSize equivalent and
+// works on both native and browser builds.
 func Size(c *app.Ctx) (int, int) {
 	g := app.GetResource[GPU](c)
 	if g == nil {
 		return 0, 0
 	}
 	return int(g.config.Width), int(g.config.Height)
+}
+
+// WindowSize returns the logical (screen-coordinate / CSS-pixel) window size —
+// the space mouse-event coordinates live in. On HiDPI this is smaller than Size.
+// Portable replacement for the native window's GetSize. Returns 0,0 if not ready.
+func WindowSize(c *app.Ctx) (int, int) {
+	g := app.GetResource[GPU](c)
+	if g == nil {
+		return 0, 0
+	}
+	return g.windowSize()
+}
+
+// CursorPos returns the latest cursor position in window (screen) coordinates,
+// the same space as mouse events. Portable replacement for the native window's
+// GetCursorPos.
+func CursorPos(c *app.Ctx) (float64, float64) {
+	g := app.GetResource[GPU](c)
+	if g == nil {
+		return 0, 0
+	}
+	return g.cursorX, g.cursorY
+}
+
+// KeyDown reports whether key is currently held, tracked from key events. This
+// is the portable replacement for polling the native window's GetKey, and works
+// the same on native and in the browser.
+func KeyDown(c *app.Ctx, key inputs.Key) bool {
+	g := app.GetResource[GPU](c)
+	if g == nil {
+		return false
+	}
+	return g.keysDown[key]
 }

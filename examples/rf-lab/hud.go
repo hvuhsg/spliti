@@ -1,3 +1,5 @@
+//go:build !js
+
 package main
 
 import (
@@ -327,8 +329,8 @@ func sign(v int) int {
 // which is the coordinate space DrawPanel uses — they differ on Retina/HiDPI
 // displays. Falls back to the configured default.
 func windowSize(c *app.Ctx) (int, int) {
-	if win := render3d.Window(c); win != nil {
-		return win.GetFramebufferSize()
+	if w, h := render3d.Size(c); w > 0 && h > 0 {
+		return w, h
 	}
 	return 1280, 720
 }

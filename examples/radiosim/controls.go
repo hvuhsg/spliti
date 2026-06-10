@@ -3,9 +3,9 @@ package main
 import (
 	"math"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/examples/radiosim/sim"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
@@ -61,8 +61,7 @@ func controlsSystem(c *app.Ctx) {
 	scene := app.GetResource[Scene](c)
 	view := app.GetResource[View](c)
 	tm := app.GetResource[splititime.Time](c)
-	win := render3d.Window(c)
-	if cam == nil || ctl == nil || scene == nil || win == nil || tm == nil {
+	if cam == nil || ctl == nil || scene == nil || tm == nil {
 		return
 	}
 	dt := float32(tm.Delta().Seconds())
@@ -78,22 +77,22 @@ func controlsSystem(c *app.Ctx) {
 	flat := m.Vec3{X: fwd.X, Z: fwd.Z}.Normalize()
 	right := flat.Cross(m.Vec3{Y: 1}).Normalize()
 	var move m.Vec3
-	if down(win, glfw.KeyW) {
+	if render3d.KeyDown(c, inputs.KeyW) {
 		move = move.Add(flat)
 	}
-	if down(win, glfw.KeyS) {
+	if render3d.KeyDown(c, inputs.KeyS) {
 		move = move.Sub(flat)
 	}
-	if down(win, glfw.KeyD) {
+	if render3d.KeyDown(c, inputs.KeyD) {
 		move = move.Add(right)
 	}
-	if down(win, glfw.KeyA) {
+	if render3d.KeyDown(c, inputs.KeyA) {
 		move = move.Sub(right)
 	}
-	if down(win, glfw.KeyE) {
+	if render3d.KeyDown(c, inputs.KeyE) {
 		move = move.Add(m.Vec3{Y: 1})
 	}
-	if down(win, glfw.KeyQ) {
+	if render3d.KeyDown(c, inputs.KeyQ) {
 		move = move.Sub(m.Vec3{Y: 1})
 	}
 	if move != (m.Vec3{}) {
@@ -102,7 +101,7 @@ func controlsSystem(c *app.Ctx) {
 	ctl.apply(cam)
 
 	// Transmitter motion with the arrow keys, recomputing coverage on change.
-	moveTransmitter(c, scene, win, dt)
+	moveTransmitter(c, scene, dt)
 
 	// Update the receiver position while dragging.
 	if ctl.dragging {
@@ -113,13 +112,13 @@ func controlsSystem(c *app.Ctx) {
 // handleButtons updates the looking/dragging flags from mouse button events and
 // kicks off a receiver drag on left-press.
 func handleButtons(c *app.Ctx, ctl *CamCtl) {
-	for _, ev := range app.ReadEvents[render3d.MouseButtonEvent](c) {
+	for _, ev := range app.ReadEvents[inputs.MouseButtonEvent](c) {
 		switch ev.Button {
-		case glfw.MouseButtonRight:
-			ctl.looking = ev.Action == glfw.Press
+		case inputs.MouseButtonRight:
+			ctl.looking = ev.Action == inputs.Press
 			ctl.haveLast = false
-		case glfw.MouseButtonLeft:
-			ctl.dragging = ev.Action == glfw.Press
+		case inputs.MouseButtonLeft:
+			ctl.dragging = ev.Action == inputs.Press
 		}
 	}
 }
@@ -127,7 +126,7 @@ func handleButtons(c *app.Ctx, ctl *CamCtl) {
 // handleLook accumulates yaw/pitch from cursor motion while the right button is
 // held.
 func handleLook(c *app.Ctx, ctl *CamCtl) {
-	for _, ev := range app.ReadEvents[render3d.MouseMoveEvent](c) {
+	for _, ev := range app.ReadEvents[inputs.MouseMoveEvent](c) {
 		if !ctl.looking {
 			ctl.lastX, ctl.lastY = ev.X, ev.Y
 			ctl.haveLast = true
@@ -150,16 +149,16 @@ func handleLook(c *app.Ctx, ctl *CamCtl) {
 
 // handleToggles flips the heatmap/ray/wavefront switches on key presses.
 func handleToggles(c *app.Ctx, view *View) {
-	for _, ev := range app.ReadEvents[render3d.KeyEvent](c) {
-		if ev.Action != glfw.Press {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press {
 			continue
 		}
 		switch ev.Key {
-		case glfw.KeyH:
+		case inputs.KeyH:
 			view.ShowHeatmap = !view.ShowHeatmap
-		case glfw.KeyR:
+		case inputs.KeyR:
 			view.ShowRays = !view.ShowRays
-		case glfw.KeySpace:
+		case inputs.KeySpace:
 			view.ShowWavefront = !view.ShowWavefront
 		}
 	}
@@ -169,28 +168,28 @@ func handleToggles(c *app.Ctx, view *View) {
 // 2: 28 GHz, 3: 60 GHz) and toggles rain (T), recomputing coverage on change so
 // the band-dependent materials and atmospheric loss take effect immediately.
 func handleBandsWeather(c *app.Ctx, scene *Scene) {
-	for _, ev := range app.ReadEvents[render3d.KeyEvent](c) {
-		if ev.Action != glfw.Press {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press {
 			continue
 		}
 		switch ev.Key {
-		case glfw.Key1:
+		case inputs.Key1:
 			scene.Tx.FreqHz = 2.4e9
 			scene.recompute = true
-		case glfw.Key2:
+		case inputs.Key2:
 			scene.Tx.FreqHz = 28e9
 			scene.recompute = true
-		case glfw.Key3:
+		case inputs.Key3:
 			scene.Tx.FreqHz = 60e9
 			scene.recompute = true
-		case glfw.KeyT:
+		case inputs.KeyT:
 			if scene.Sim.Weather.RainRateMMH > 0 {
 				scene.Sim.Weather.RainRateMMH = 0
 			} else {
 				scene.Sim.Weather.RainRateMMH = 25 // mm/h, heavy rain
 			}
 			scene.recompute = true
-		case glfw.KeyM:
+		case inputs.KeyM:
 			cycleWallMaterial(scene)
 		}
 	}
@@ -225,8 +224,8 @@ func handleEngineToggle(c *app.Ctx, scene *Scene) {
 	if eng == nil {
 		return
 	}
-	for _, ev := range app.ReadEvents[render3d.KeyEvent](c) {
-		if ev.Action != glfw.Press || ev.Key != glfw.KeyG {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press || ev.Key != inputs.KeyG {
 			continue
 		}
 		if _, isSBR := eng.Engine.(sim.SBREngine); isSBR {
@@ -240,18 +239,18 @@ func handleEngineToggle(c *app.Ctx, scene *Scene) {
 
 // moveTransmitter nudges the Tx in the XZ plane with the arrow keys and flags a
 // coverage recompute when it actually moves.
-func moveTransmitter(c *app.Ctx, scene *Scene, win *glfw.Window, dt float32) {
+func moveTransmitter(c *app.Ctx, scene *Scene, dt float32) {
 	var d m.Vec3
-	if down(win, glfw.KeyUp) {
+	if render3d.KeyDown(c, inputs.KeyUp) {
 		d.X += 1
 	}
-	if down(win, glfw.KeyDown) {
+	if render3d.KeyDown(c, inputs.KeyDown) {
 		d.X -= 1
 	}
-	if down(win, glfw.KeyLeft) {
+	if render3d.KeyDown(c, inputs.KeyLeft) {
 		d.Z -= 1
 	}
-	if down(win, glfw.KeyRight) {
+	if render3d.KeyDown(c, inputs.KeyRight) {
 		d.Z += 1
 	}
 	if d == (m.Vec3{}) {
@@ -271,11 +270,7 @@ func moveTransmitter(c *app.Ctx, scene *Scene, win *glfw.Window, dt float32) {
 // dragReceiver moves the receiver to where the cursor ray meets the receiver-
 // height plane.
 func dragReceiver(c *app.Ctx, scene *Scene) {
-	win := render3d.Window(c)
-	if win == nil {
-		return
-	}
-	x, y := win.GetCursorPos()
+	x, y := render3d.CursorPos(c)
 	origin, dir := render3d.ScreenToRay(c, x, y)
 	hit, ok := rayPlaneY(origin, dir, scene.RxHeight)
 	if !ok {
@@ -331,8 +326,6 @@ func coverageSystem(c *app.Ctx) {
 }
 
 // --- small helpers ---
-
-func down(win *glfw.Window, key glfw.Key) bool { return win.GetKey(key) == glfw.Press }
 
 func rayPlaneY(origin, dir m.Vec3, y float32) (m.Vec3, bool) {
 	if dir.Y > -1e-6 && dir.Y < 1e-6 {

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math/rand"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/webgpu"
 )
 
@@ -27,23 +27,23 @@ func sigmaOf(step int) float64 { return float64(step) * 0.09 }
 // handleRxKeys applies the shared controls: Left/Right pick the symbol, Up/Down
 // change the noise level. Any change forces an immediate new received sample.
 func handleRxKeys(c *app.Ctx, ui *uiState) {
-	for _, ev := range app.ReadEvents[webgpu.KeyEvent](c) {
-		if ev.Action != glfw.Press && ev.Action != glfw.Repeat {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press && ev.Action != inputs.Repeat {
 			continue
 		}
 		switch ev.Key {
-		case glfw.KeyRight:
+		case inputs.KeyRight:
 			ui.sym = (ui.sym + 1) & 3
 			ui.nextSample = 0
-		case glfw.KeyLeft:
+		case inputs.KeyLeft:
 			ui.sym = (ui.sym + 3) & 3
 			ui.nextSample = 0
-		case glfw.KeyUp:
+		case inputs.KeyUp:
 			if ui.noiseStep < maxNoiseStep {
 				ui.noiseStep++
 			}
 			ui.nextSample = 0
-		case glfw.KeyDown:
+		case inputs.KeyDown:
 			if ui.noiseStep > 0 {
 				ui.noiseStep--
 			}

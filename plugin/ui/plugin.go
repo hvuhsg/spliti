@@ -21,6 +21,9 @@
 // Build requirements: cimgui-go is a cgo wrapper around the Dear ImGui C++
 // library, so (like render3d) this builds only with CGO_ENABLED=1 and a C++
 // toolchain.
+
+//go:build !js
+
 package ui
 
 import (
