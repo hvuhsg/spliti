@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/webgpu"
 )
 
@@ -156,17 +156,17 @@ func setupBandwidth(c *app.Ctx) {
 func bandwidthInput(c *app.Ctx) {
 	ui := app.GetResource[uiState](c)
 	changed := false
-	for _, ev := range app.ReadEvents[webgpu.KeyEvent](c) {
-		if ev.Action != glfw.Press && ev.Action != glfw.Repeat {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press && ev.Action != inputs.Repeat {
 			continue
 		}
 		switch ev.Key {
-		case glfw.KeyRight:
+		case inputs.KeyRight:
 			if ui.bwNSym < isiMaxSym {
 				ui.bwNSym++
 				changed = true
 			}
-		case glfw.KeyLeft:
+		case inputs.KeyLeft:
 			if ui.bwNSym > 2 {
 				ui.bwNSym--
 				changed = true

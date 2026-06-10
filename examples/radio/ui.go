@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/webgpu"
 	"github.com/mlange-42/arche/ecs"
 )
@@ -34,8 +34,8 @@ func mouseToWorld(c *app.Ctx, x, y float64) (float32, float32) {
 // every scene so MainFlow's stage boxes and the detail scenes' Back button all
 // work through the same path.
 func clickSystem(c *app.Ctx) {
-	for _, ev := range app.ReadEvents[webgpu.MouseButtonEvent](c) {
-		if ev.Button != glfw.MouseButtonLeft || ev.Action != glfw.Press {
+	for _, ev := range app.ReadEvents[inputs.MouseButtonEvent](c) {
+		if ev.Button != inputs.MouseButtonLeft || ev.Action != inputs.Press {
 			continue
 		}
 		wx, wy := mouseToWorld(c, ev.X, ev.Y)
@@ -58,8 +58,8 @@ func clickSystem(c *app.Ctx) {
 // escapeSystem makes Escape go back: to MainFlow from a detail scene, or quit
 // from MainFlow.
 func escapeSystem(c *app.Ctx) {
-	for _, ev := range app.ReadEvents[webgpu.KeyEvent](c) {
-		if ev.Key == glfw.KeyEscape && ev.Action == glfw.Press {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Key == inputs.KeyEscape && ev.Action == inputs.Press {
 			if app.GetState[Scene](c).Get() == MainFlow {
 				c.App().Stop()
 			} else {

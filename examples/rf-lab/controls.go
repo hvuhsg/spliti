@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
@@ -110,13 +111,13 @@ func controlsSystem(c *app.Ctx) {
 // raycasts to select a marker (or deselect on empty ground) and begins a drag.
 func handleButtons(c *app.Ctx, ctl *CamCtl, lab *Lab) {
 	txE, rxE := markerEntities(c)
-	for _, ev := range app.ReadEvents[render3d.MouseButtonEvent](c) {
+	for _, ev := range app.ReadEvents[inputs.MouseButtonEvent](c) {
 		switch ev.Button {
-		case glfw.MouseButtonRight:
-			ctl.looking = ev.Action == glfw.Press
+		case inputs.MouseButtonRight:
+			ctl.looking = ev.Action == inputs.Press
 			ctl.haveLast = false
-		case glfw.MouseButtonLeft:
-			if ev.Action == glfw.Release {
+		case inputs.MouseButtonLeft:
+			if ev.Action == inputs.Release {
 				ctl.dragging = false
 				continue
 			}
@@ -147,7 +148,7 @@ func markerEntities(c *app.Ctx) (tx, rx ecs.Entity) {
 // handleLook accumulates yaw/pitch from cursor motion while the right button is
 // held.
 func handleLook(c *app.Ctx, ctl *CamCtl) {
-	for _, ev := range app.ReadEvents[render3d.MouseMoveEvent](c) {
+	for _, ev := range app.ReadEvents[inputs.MouseMoveEvent](c) {
 		if !ctl.looking || !ctl.haveLast {
 			ctl.lastX, ctl.lastY = ev.X, ev.Y
 			ctl.haveLast = true
@@ -172,33 +173,33 @@ func handleConfigKeys(c *app.Ctx, lab *Lab) {
 	}
 	txd := txDevice(c)
 	rxd := rxDevice(c)
-	for _, ev := range app.ReadEvents[render3d.KeyEvent](c) {
-		if ev.Action != glfw.Press && ev.Action != glfw.Repeat {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press && ev.Action != inputs.Repeat {
 			continue
 		}
 		switch {
 		case lab.Sel == SelTx && txd != nil:
 			switch ev.Key {
-			case glfw.KeyUp: // +1 dB
+			case inputs.KeyUp: // +1 dB
 				txd.PowerW *= math.Pow(10, 0.1)
-			case glfw.KeyDown: // -1 dB
+			case inputs.KeyDown: // -1 dB
 				txd.PowerW *= math.Pow(10, -0.1)
-			case glfw.KeyRight: // +2 MHz (shorter wavelength)
+			case inputs.KeyRight: // +2 MHz (shorter wavelength)
 				txd.FreqHz += 2e6
-			case glfw.KeyLeft: // -2 MHz (longer wavelength)
+			case inputs.KeyLeft: // -2 MHz (longer wavelength)
 				txd.FreqHz -= 2e6
 			}
 			txd.PowerW = clampf(txd.PowerW, 1e-12, 1e-3) // -90 … 0 dBm
 			txd.FreqHz = clampf(txd.FreqHz, 10e6, 45e6)  // 10–45 MHz (λ 6.7–30 m, visible)
 		case lab.Sel == SelRx && rxd != nil:
 			switch ev.Key {
-			case glfw.KeyUp:
+			case inputs.KeyUp:
 				rxd.GainDBi += 1
-			case glfw.KeyDown:
+			case inputs.KeyDown:
 				rxd.GainDBi -= 1
-			case glfw.KeyRight:
+			case inputs.KeyRight:
 				rxd.NoiseFigDB += 0.5
-			case glfw.KeyLeft:
+			case inputs.KeyLeft:
 				rxd.NoiseFigDB -= 0.5
 			}
 			rxd.GainDBi = clampf(rxd.GainDBi, -10, 30)

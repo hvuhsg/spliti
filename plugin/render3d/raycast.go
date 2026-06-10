@@ -23,10 +23,13 @@ type Hit struct {
 func ScreenToRay(c *app.Ctx, px, py float64) (origin, dir m.Vec3) {
 	cam := app.GetResource[Camera3D](c)
 	g := app.GetResource[GPU](c)
-	if cam == nil || g == nil || g.window == nil {
+	if cam == nil || g == nil {
 		return m.Vec3{}, m.Vec3{Z: -1}
 	}
-	w, h := g.window.GetSize()
+	w, h := g.windowSize()
+	if w == 0 || h == 0 {
+		return m.Vec3{}, m.Vec3{Z: -1}
+	}
 	return cam.ScreenToRay(px, py, w, h)
 }
 

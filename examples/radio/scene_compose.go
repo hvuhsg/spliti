@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/webgpu"
 )
 
@@ -150,25 +150,25 @@ func bakeComposeMode(c *app.Ctx, ui *uiState) {
 func composeInput(c *app.Ctx) {
 	ui := app.GetResource[uiState](c)
 	textCh, modeCh := false, false
-	for _, ev := range app.ReadEvents[webgpu.KeyEvent](c) {
-		pressed := ev.Action == glfw.Press || ev.Action == glfw.Repeat
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		pressed := ev.Action == inputs.Press || ev.Action == inputs.Repeat
 		switch {
 		case ev.Rune >= 32 && ev.Rune < 127: // a printable character was typed
 			if len(ui.compose) < cmpMaxChars {
 				ui.compose += string(ev.Rune)
 				textCh = true
 			}
-		case ev.Key == glfw.KeyBackspace && pressed:
+		case ev.Key == inputs.KeyBackspace && pressed:
 			if len(ui.compose) > 0 {
 				ui.compose = ui.compose[:len(ui.compose)-1]
 				textCh = true
 			}
-		case ev.Key == glfw.KeyUp && pressed:
+		case ev.Key == inputs.KeyUp && pressed:
 			if ui.bps < 4 {
 				ui.bps++
 				modeCh = true
 			}
-		case ev.Key == glfw.KeyDown && pressed:
+		case ev.Key == inputs.KeyDown && pressed:
 			if ui.bps > 2 {
 				ui.bps--
 				modeCh = true

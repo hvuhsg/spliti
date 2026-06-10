@@ -24,8 +24,8 @@ package main
 import (
 	"runtime"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
@@ -123,8 +123,8 @@ func quitOnEscape(c *app.Ctx) {
 	if ui := app.GetResource[UI](c); ui != nil && ui.Mode == ModeGraph {
 		return
 	}
-	for _, ev := range app.ReadEvents[render3d.KeyEvent](c) {
-		if ev.Key == glfw.KeyEscape && ev.Action == glfw.Press {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Key == inputs.KeyEscape && ev.Action == inputs.Press {
 			c.App().Stop()
 		}
 	}

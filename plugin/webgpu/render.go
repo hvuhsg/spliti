@@ -94,7 +94,7 @@ func renderSystem(c *app.Ctx) {
 	g.frameActive = true
 
 	pass.SetPipeline(g.pipeline)
-	pass.SetVertexBuffer(0, g.quadBuf, 0, g.quadBuf.GetSize())
+	pass.SetVertexBuffer(0, g.quadBuf, 0, g.quadBufSize)
 	pass.SetBindGroup(0, g.cameraBindGroup, nil)
 
 	drawSprites(c, g, pass)
@@ -205,7 +205,7 @@ func presentSystem(c *app.Ctx) {
 		g.frameActive = false
 	}()
 
-	_ = g.curPass.End()
+	g.curPass.End()
 	cmd, err := g.curEncoder.Finish(nil)
 	if err != nil {
 		return

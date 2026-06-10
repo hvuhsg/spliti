@@ -6,6 +6,7 @@ import (
 	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/examples/radiosim/sim"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
@@ -113,13 +114,13 @@ func controlsSystem(c *app.Ctx) {
 // handleButtons updates the looking/dragging flags from mouse button events and
 // kicks off a receiver drag on left-press.
 func handleButtons(c *app.Ctx, ctl *CamCtl) {
-	for _, ev := range app.ReadEvents[render3d.MouseButtonEvent](c) {
+	for _, ev := range app.ReadEvents[inputs.MouseButtonEvent](c) {
 		switch ev.Button {
-		case glfw.MouseButtonRight:
-			ctl.looking = ev.Action == glfw.Press
+		case inputs.MouseButtonRight:
+			ctl.looking = ev.Action == inputs.Press
 			ctl.haveLast = false
-		case glfw.MouseButtonLeft:
-			ctl.dragging = ev.Action == glfw.Press
+		case inputs.MouseButtonLeft:
+			ctl.dragging = ev.Action == inputs.Press
 		}
 	}
 }
@@ -127,7 +128,7 @@ func handleButtons(c *app.Ctx, ctl *CamCtl) {
 // handleLook accumulates yaw/pitch from cursor motion while the right button is
 // held.
 func handleLook(c *app.Ctx, ctl *CamCtl) {
-	for _, ev := range app.ReadEvents[render3d.MouseMoveEvent](c) {
+	for _, ev := range app.ReadEvents[inputs.MouseMoveEvent](c) {
 		if !ctl.looking {
 			ctl.lastX, ctl.lastY = ev.X, ev.Y
 			ctl.haveLast = true
@@ -150,16 +151,16 @@ func handleLook(c *app.Ctx, ctl *CamCtl) {
 
 // handleToggles flips the heatmap/ray/wavefront switches on key presses.
 func handleToggles(c *app.Ctx, view *View) {
-	for _, ev := range app.ReadEvents[render3d.KeyEvent](c) {
-		if ev.Action != glfw.Press {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press {
 			continue
 		}
 		switch ev.Key {
-		case glfw.KeyH:
+		case inputs.KeyH:
 			view.ShowHeatmap = !view.ShowHeatmap
-		case glfw.KeyR:
+		case inputs.KeyR:
 			view.ShowRays = !view.ShowRays
-		case glfw.KeySpace:
+		case inputs.KeySpace:
 			view.ShowWavefront = !view.ShowWavefront
 		}
 	}
@@ -169,28 +170,28 @@ func handleToggles(c *app.Ctx, view *View) {
 // 2: 28 GHz, 3: 60 GHz) and toggles rain (T), recomputing coverage on change so
 // the band-dependent materials and atmospheric loss take effect immediately.
 func handleBandsWeather(c *app.Ctx, scene *Scene) {
-	for _, ev := range app.ReadEvents[render3d.KeyEvent](c) {
-		if ev.Action != glfw.Press {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press {
 			continue
 		}
 		switch ev.Key {
-		case glfw.Key1:
+		case inputs.Key1:
 			scene.Tx.FreqHz = 2.4e9
 			scene.recompute = true
-		case glfw.Key2:
+		case inputs.Key2:
 			scene.Tx.FreqHz = 28e9
 			scene.recompute = true
-		case glfw.Key3:
+		case inputs.Key3:
 			scene.Tx.FreqHz = 60e9
 			scene.recompute = true
-		case glfw.KeyT:
+		case inputs.KeyT:
 			if scene.Sim.Weather.RainRateMMH > 0 {
 				scene.Sim.Weather.RainRateMMH = 0
 			} else {
 				scene.Sim.Weather.RainRateMMH = 25 // mm/h, heavy rain
 			}
 			scene.recompute = true
-		case glfw.KeyM:
+		case inputs.KeyM:
 			cycleWallMaterial(scene)
 		}
 	}
@@ -225,8 +226,8 @@ func handleEngineToggle(c *app.Ctx, scene *Scene) {
 	if eng == nil {
 		return
 	}
-	for _, ev := range app.ReadEvents[render3d.KeyEvent](c) {
-		if ev.Action != glfw.Press || ev.Key != glfw.KeyG {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press || ev.Key != inputs.KeyG {
 			continue
 		}
 		if _, isSBR := eng.Engine.(sim.SBREngine); isSBR {

@@ -22,6 +22,8 @@ type Mesh struct {
 type meshGPU struct {
 	vbuf       *wgpu.Buffer
 	ibuf       *wgpu.Buffer
+	vbufSize   uint64 // byte size of vbuf, tracked for portable SetVertexBuffer
+	ibufSize   uint64 // byte size of ibuf, tracked for portable SetIndexBuffer
 	indexCount uint32
 	cpu        *Mesh
 }
@@ -51,17 +53,19 @@ func (r *MeshRegistry) Load(ref string, mesh *Mesh) error {
 	}
 	g := r.gpu
 
+	vbytes := wgpu.ToBytes(mesh.Vertices)
 	vbuf, err := g.device.CreateBufferInit(&wgpu.BufferInitDescriptor{
 		Label:    "spliti.render3d.vbuf." + ref,
-		Contents: wgpu.ToBytes(mesh.Vertices),
+		Contents: vbytes,
 		Usage:    wgpu.BufferUsageVertex,
 	})
 	if err != nil {
 		return fmt.Errorf("render3d: vertex buffer %q: %w", ref, err)
 	}
+	ibytes := wgpu.ToBytes(mesh.Indices)
 	ibuf, err := g.device.CreateBufferInit(&wgpu.BufferInitDescriptor{
 		Label:    "spliti.render3d.ibuf." + ref,
-		Contents: wgpu.ToBytes(mesh.Indices),
+		Contents: ibytes,
 		Usage:    wgpu.BufferUsageIndex,
 	})
 	if err != nil {
@@ -75,6 +79,8 @@ func (r *MeshRegistry) Load(ref string, mesh *Mesh) error {
 	r.byRef[ref] = &meshGPU{
 		vbuf:       vbuf,
 		ibuf:       ibuf,
+		vbufSize:   uint64(len(vbytes)),
+		ibufSize:   uint64(len(ibytes)),
 		indexCount: uint32(len(mesh.Indices)),
 		cpu:        mesh,
 	}
