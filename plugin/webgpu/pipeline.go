@@ -118,9 +118,11 @@ func buildPipeline(g *GPU, format wgpu.TextureFormat) {
 		panic("webgpu: sampler: " + err.Error())
 	}
 
+	quadBytes := wgpu.ToBytes(unitQuad)
+	g.quadBufSize = uint64(len(quadBytes))
 	g.quadBuf, err = g.device.CreateBufferInit(&wgpu.BufferInitDescriptor{
 		Label:    "spliti.webgpu.quad",
-		Contents: wgpu.ToBytes(unitQuad),
+		Contents: quadBytes,
 		Usage:    wgpu.BufferUsageVertex,
 	})
 	if err != nil {

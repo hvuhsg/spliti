@@ -269,12 +269,12 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 		off := uint64(b.start * instanceStride)
 		size := uint64(b.count * instanceStride)
 		pass.SetBindGroup(1, mat.bindGroup, nil)
-		pass.SetVertexBuffer(0, gm.vbuf, 0, gm.vbuf.GetSize())
+		pass.SetVertexBuffer(0, gm.vbuf, 0, gm.vbufSize)
 		// The instance buffer binding is already offset to this batch's start, so
 		// firstInstance is 0 (not b.start) — otherwise the base instance would be
 		// counted twice and read past the bound range.
 		pass.SetVertexBuffer(1, g.instanceBuf, off, size)
-		pass.SetIndexBuffer(gm.ibuf, wgpu.IndexFormatUint32, 0, gm.ibuf.GetSize())
+		pass.SetIndexBuffer(gm.ibuf, wgpu.IndexFormatUint32, 0, gm.ibufSize)
 		pass.DrawIndexed(gm.indexCount, uint32(b.count), 0, 0, 0)
 	}
 
@@ -290,9 +290,9 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 			mat := materials.get(it.material)
 			off := uint64((opaqueCount + i) * instanceStride)
 			pass.SetBindGroup(1, mat.bindGroup, nil)
-			pass.SetVertexBuffer(0, gm.vbuf, 0, gm.vbuf.GetSize())
+			pass.SetVertexBuffer(0, gm.vbuf, 0, gm.vbufSize)
 			pass.SetVertexBuffer(1, g.instanceBuf, off, uint64(instanceStride))
-			pass.SetIndexBuffer(gm.ibuf, wgpu.IndexFormatUint32, 0, gm.ibuf.GetSize())
+			pass.SetIndexBuffer(gm.ibuf, wgpu.IndexFormatUint32, 0, gm.ibufSize)
 			pass.DrawIndexed(gm.indexCount, 1, 0, 0, 0)
 		}
 	}
@@ -348,7 +348,7 @@ func presentSystem(c *app.Ctx) {
 		g.frameActive = false
 	}()
 
-	_ = g.curPass.End()
+	g.curPass.End()
 	cmd, err := g.curEncoder.Finish(nil)
 	if err != nil {
 		return

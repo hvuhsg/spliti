@@ -22,8 +22,8 @@ import (
 	"runtime/trace"
 	gotime "time"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
 	"github.com/hvuhsg/spliti/plugin/webgpu"
 	"github.com/hvuhsg/spliti/schedule"
@@ -257,8 +257,8 @@ func interpolate(c *app.Ctx) {
 }
 
 func quitOnEscape(c *app.Ctx) {
-	for _, ev := range app.ReadEvents[webgpu.KeyEvent](c) {
-		if ev.Key == glfw.KeyEscape && ev.Action == glfw.Press {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Key == inputs.KeyEscape && ev.Action == inputs.Press {
 			c.App().Stop()
 		}
 	}

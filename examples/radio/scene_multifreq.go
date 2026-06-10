@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/webgpu"
 )
 
@@ -128,25 +128,25 @@ func bakeMFInfo(c *app.Ctx, ui *uiState) {
 func multiFreqInput(c *app.Ctx) {
 	ui := app.GetResource[uiState](c)
 	changed := false
-	for _, ev := range app.ReadEvents[webgpu.KeyEvent](c) {
-		if ev.Action != glfw.Press && ev.Action != glfw.Repeat {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press && ev.Action != inputs.Repeat {
 			continue
 		}
 		switch ev.Key {
-		case glfw.KeyUp:
+		case inputs.KeyUp:
 			if ui.mfN < mfMaxCarriers {
 				ui.mfN++
 				changed = true
 			}
-		case glfw.KeyDown:
+		case inputs.KeyDown:
 			if ui.mfN > 2 {
 				ui.mfN--
 				changed = true
 			}
-		case glfw.KeyRight:
+		case inputs.KeyRight:
 			ui.mfSeed++
 			changed = true
-		case glfw.KeyLeft:
+		case inputs.KeyLeft:
 			ui.mfSeed--
 			changed = true
 		}

@@ -4,8 +4,8 @@ import (
 	"image"
 	"image/color"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 )
 
@@ -145,26 +145,26 @@ func editorSystem(c *app.Ctx) {
 		}
 	}
 
-	for _, ev := range app.ReadEvents[render3d.MouseMoveEvent](c) {
+	for _, ev := range app.ReadEvents[inputs.MouseMoveEvent](c) {
 		ed.mx, ed.my = float32(ev.X*scale), float32(ev.Y*scale)
 	}
 
-	for _, ev := range app.ReadEvents[render3d.MouseButtonEvent](c) {
-		if ev.Button != glfw.MouseButtonLeft {
+	for _, ev := range app.ReadEvents[inputs.MouseButtonEvent](c) {
+		if ev.Button != inputs.MouseButtonLeft {
 			continue
 		}
 		px, py := float32(ev.X*scale), float32(ev.Y*scale)
 		ed.mx, ed.my = px, py
 		switch {
 		case ui.Mode == ModeExplore:
-			if ev.Action == glfw.Press && lab.Sel != SelNone && openGraphButtonRect(fbW, fbH).hit(px, py) {
+			if ev.Action == inputs.Press && lab.Sel != SelNone && openGraphButtonRect(fbW, fbH).hit(px, py) {
 				ui.Mode, ed.target, ed.editID, ed.redraw = ModeGraph, lab.Sel, 0, true
 			}
 		case g == nil:
 			// nothing to edit
-		case ev.Action == glfw.Press:
+		case ev.Action == inputs.Press:
 			editorPress(ui, ed, g, play, fbW, fbH, px, py)
-		case ev.Action == glfw.Release:
+		case ev.Action == inputs.Release:
 			editorRelease(ed, g, play, fbW, fbH, px, py)
 		}
 	}
@@ -269,8 +269,8 @@ func editorRelease(ed *Editor, g *Graph, play *Play, fbW, fbH int, px, py float3
 
 // editorKeys handles text entry (TX message) and Escape.
 func editorKeys(c *app.Ctx, ui *UI, ed *Editor, g *Graph, play *Play) {
-	for _, ev := range app.ReadEvents[render3d.KeyEvent](c) {
-		if ev.Key == glfw.KeyEscape && ev.Action == glfw.Press {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Key == inputs.KeyEscape && ev.Action == inputs.Press {
 			if ed.editID != 0 {
 				ed.editID = 0
 			} else {
@@ -288,17 +288,17 @@ func editorKeys(c *app.Ctx, ui *UI, ed *Editor, g *Graph, play *Play) {
 			continue
 		}
 		switch {
-		case ev.Rune >= 32 && ev.Action == glfw.Press:
+		case ev.Rune >= 32 && ev.Action == inputs.Press:
 			n.Text += string(ev.Rune)
 			ed.redraw = true
 			markDirty(g, play)
-		case ev.Key == glfw.KeyBackspace && (ev.Action == glfw.Press || ev.Action == glfw.Repeat):
+		case ev.Key == inputs.KeyBackspace && (ev.Action == inputs.Press || ev.Action == inputs.Repeat):
 			if r := []rune(n.Text); len(r) > 0 {
 				n.Text = string(r[:len(r)-1])
 				ed.redraw = true
 				markDirty(g, play)
 			}
-		case (ev.Key == glfw.KeyEnter || ev.Key == glfw.KeyKPEnter) && ev.Action == glfw.Press:
+		case (ev.Key == inputs.KeyEnter || ev.Key == inputs.KeyKPEnter) && ev.Action == inputs.Press:
 			ed.editID, ed.redraw = 0, true
 		}
 	}
@@ -314,12 +314,8 @@ func markDirty(g *Graph, play *Play) {
 // uiScale returns framebuffer-px / window-point, so mouse coords (window points)
 // hit-test correctly against the framebuffer-px overlay layout (Retina differs).
 func uiScale(c *app.Ctx) float64 {
-	win := render3d.Window(c)
-	if win == nil {
-		return 1
-	}
-	fw, _ := win.GetFramebufferSize()
-	lw, _ := win.GetSize()
+	fw, _ := render3d.Size(c)       // framebuffer pixels
+	lw, _ := render3d.WindowSize(c) // window points
 	if lw == 0 {
 		return 1
 	}

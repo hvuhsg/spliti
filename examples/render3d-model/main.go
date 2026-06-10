@@ -17,8 +17,8 @@ import (
 	"log"
 	"runtime"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
@@ -106,9 +106,10 @@ func orbitCamera(c *app.Ctx) {
 }
 
 func quitOnEscape(c *app.Ctx) {
-	win := render3d.Window(c)
-	if win != nil && win.GetKey(glfw.KeyEscape) == glfw.Press {
-		win.SetShouldClose(true)
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Key == inputs.KeyEscape && ev.Action == inputs.Press {
+			c.App().Stop()
+		}
 	}
 }
 

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/webgpu"
 )
 
@@ -95,18 +95,18 @@ func demodPanel2(c *app.Ctx, ref string, vp viewport, label string) {
 
 func qam16Input(c *app.Ctx) {
 	ui := app.GetResource[uiState](c)
-	for _, ev := range app.ReadEvents[webgpu.KeyEvent](c) {
-		if ev.Action != glfw.Press && ev.Action != glfw.Repeat {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press && ev.Action != inputs.Repeat {
 			continue
 		}
 		switch ev.Key {
-		case glfw.KeyLeft:
+		case inputs.KeyLeft:
 			ui.qamI = max(0, ui.qamI-1)
-		case glfw.KeyRight:
+		case inputs.KeyRight:
 			ui.qamI = min(3, ui.qamI+1)
-		case glfw.KeyUp:
+		case inputs.KeyUp:
 			ui.qamQ = min(3, ui.qamQ+1)
-		case glfw.KeyDown:
+		case inputs.KeyDown:
 			ui.qamQ = max(0, ui.qamQ-1)
 		}
 	}

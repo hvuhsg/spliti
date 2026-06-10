@@ -1,45 +1,20 @@
 package render3d
 
 import (
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 )
 
-// KeyEvent is emitted for keyboard activity. Two sources feed it, mirroring
-// GLFW's two callbacks:
-//
-//   - Key presses/releases/repeats: Key, Action, and Mods are set; Rune is 0.
-//   - Typed text: Rune is set and Action is glfw.Press; Key is 0.
-type KeyEvent struct {
-	Key    glfw.Key
-	Rune   rune
-	Action glfw.Action
-	Mods   glfw.ModifierKey
-}
-
-// CloseEvent is emitted once when the window's close button is pressed. The
-// input system also calls App.Stop() on close, so games can rely on a clean
-// shutdown without handling this; read it if you want to react first.
-type CloseEvent struct{}
-
-// pollInput runs in schedule.First on the main goroutine (required by GLFW). It
-// pumps the event queue — which fires the callbacks installed in Build — applies
-// any pending framebuffer resize, forwards buffered events, and translates a
-// window-close request into a CloseEvent + App.Stop().
-func pollInput(c *app.Ctx) {
-	g := app.GetResource[GPU](c)
-	if g == nil {
-		return
-	}
-
-	glfw.PollEvents()
-
-	if g.resized {
-		applyResize(c, g)
-		g.resized = false
-	}
-
+// drainEvents forwards the platform-filled input buffers as backend-agnostic
+// plugin/inputs events and clears them. Both the native and js pollInput call it
+// after pumping/receiving platform events; it runs on the main goroutine, so no
+// locking is needed.
+func drainEvents(c *app.Ctx, g *GPU) {
 	for _, ev := range g.keyEvents {
+		// Track held keys from key events (Rune == 0); skip typed-text events.
+		if ev.Rune == 0 {
+			g.keysDown[ev.Key] = ev.Action != inputs.Release
+		}
 		app.SendEvent(c, ev)
 	}
 	g.keyEvents = g.keyEvents[:0]
@@ -53,11 +28,6 @@ func pollInput(c *app.Ctx) {
 		app.SendEvent(c, ev)
 	}
 	g.mouseButton = g.mouseButton[:0]
-
-	if g.window.ShouldClose() {
-		app.SendEvent(c, CloseEvent{})
-		c.App().Stop()
-	}
 }
 
 // applyResize reconfigures the surface to the new framebuffer size and rebuilds

@@ -3,9 +3,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
-	"github.com/hvuhsg/spliti/plugin/webgpu"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 )
 
 // Carrier scene: the "more peaks = more data?" trap, answered head-on.
@@ -124,27 +123,27 @@ func carrierPanel(c *app.Ctx, ref string, vp viewport, label string) {
 func carrierInput(c *app.Ctx) {
 	ui := app.GetResource[uiState](c)
 	changed := false
-	for _, ev := range app.ReadEvents[webgpu.KeyEvent](c) {
-		if ev.Action != glfw.Press && ev.Action != glfw.Repeat {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press && ev.Action != inputs.Repeat {
 			continue
 		}
 		switch ev.Key {
-		case glfw.KeyUp:
+		case inputs.KeyUp:
 			if ui.ckCarB < ckMaxCarB {
 				ui.ckCarB++
 				changed = true
 			}
-		case glfw.KeyDown:
+		case inputs.KeyDown:
 			if ui.ckCarB > 1 {
 				ui.ckCarB--
 				changed = true
 			}
-		case glfw.KeyRight:
+		case inputs.KeyRight:
 			if ui.ckNSym < ckMaxSym {
 				ui.ckNSym++
 				changed = true
 			}
-		case glfw.KeyLeft:
+		case inputs.KeyLeft:
 			if ui.ckNSym > 2 {
 				ui.ckNSym--
 				changed = true

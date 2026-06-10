@@ -52,8 +52,9 @@ Working today:
 - Resources, events with frame-buffered lifetime, typed state machines.
 - Time plugin with fixed-timestep accumulator and frame pacing.
 - **Terminal rendering**: tcell-backed glyph render + input, with a single flush per frame so HUD overlays don't flicker. Plus ASCII-art `sprite` rendering and a truecolor half-block pixel `canvas` for image-like output in the terminal.
-- **2D GPU rendering**: drop in `webgpu.Plugin` to open a window and draw textured-sprite entities through the GPU (WebGPU via [cogentcore/webgpu](https://github.com/cogentcore/webgpu) + GLFW). It's a render/present/input plugin against the same seam as `tui`, with its own tcell-free `Transform`/`Color`/`Sprite` components. Requires `CGO_ENABLED=1`. See `examples/gpu-demo`.
-- **3D GPU rendering**: drop in `render3d.Plugin` for a real-time 3D renderer — perspective camera, depth buffer, indexed triangle meshes with vertex normals, PBR metallic-roughness shading with directional and point lights, GPU instancing, a transparent pass, line gizmos, picking, and a 2D overlay. Entities render via `Transform3D` + `MeshRenderer`. Requires `CGO_ENABLED=1`. See `examples/render3d-demo` and `examples/radio3d`.
+- **2D GPU rendering**: drop in `webgpu.Plugin` to open a window and draw textured-sprite entities through the GPU (WebGPU via [cogentcore/webgpu](https://github.com/cogentcore/webgpu) + GLFW). It's a render/present/input plugin against the same seam as `tui`, with its own tcell-free `Transform`/`Color`/`Sprite` components. Runs natively (`CGO_ENABLED=1`) **and in the browser** via `GOOS=js GOARCH=wasm`. See `examples/gpu-demo`.
+- **3D GPU rendering**: drop in `render3d.Plugin` for a real-time 3D renderer — perspective camera, depth buffer, indexed triangle meshes with vertex normals, PBR metallic-roughness shading with directional and point lights, GPU instancing, a transparent pass, line gizmos, picking, and a 2D overlay. Entities render via `Transform3D` + `MeshRenderer`. Runs natively (`CGO_ENABLED=1`) **and in the browser** via `GOOS=js GOARCH=wasm`. See `examples/render3d-demo` and `examples/radio3d`.
+- **Browser (WebAssembly)**: both GPU backends compile to `js/wasm`, driving the page's native WebGPU and DOM input, with no cgo. Game code is unchanged — input flows through the backend-agnostic `plugin/inputs` events. Build with `scripts/build-wasm.sh` and serve with `go run ./cmd/webserve`.
 - The engine keeps owning the loop in every case — no render backend takes over `app.Run()`.
 - **Visual editor**: a tcell-based editor (`editor/`) for authoring scenes from data — entities, components, and behaviors from the `runtime` plugin's built-in vocabulary, saved/loaded as project files. See `examples/editor-demo`.
 - TCP **lockstep multiplayer** for 2..N players. Drop in `network.Plugin`, read `PlayerKey` events, stay deterministic. See [docs/network.md](docs/network.md).
@@ -103,6 +104,13 @@ CGO_ENABLED=1 go run github.com/hvuhsg/spliti/examples/render3d-demo   # 3D PBR 
 CGO_ENABLED=1 go run github.com/hvuhsg/spliti/examples/radio          # 2D radio teaching game
 CGO_ENABLED=1 go run github.com/hvuhsg/spliti/examples/radio3d        # 3D radio-wave propagation
 CGO_ENABLED=1 go run github.com/hvuhsg/spliti/examples/radiosim       # accurate radio-wave simulator
+
+# Same GPU demos in the browser (WebGPU-capable browser required, no cgo)
+scripts/build-wasm.sh                                                  # builds gpu-demo + render3d-demo to web/dist/
+go run github.com/hvuhsg/spliti/cmd/webserve                          # then open http://localhost:8080/?demo=gpu-demo
+
+# Or bundle a game into ONE double-clickable .html (wasm inlined, no server)
+scripts/build-single.sh gpu-demo                                       # writes gpu-demo.html — just open it in a WebGPU browser
 ```
 
 Snake controls: arrow keys or WASD, `q` to quit, `r` to restart on game over.

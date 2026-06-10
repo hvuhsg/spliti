@@ -23,8 +23,7 @@ const (
 // active band, engine, weather, and wall material, plus a one-line key legend.
 func updateUI(c *app.Ctx, scene *Scene, eng *Engine) {
 	ui := app.GetResource[UI](c)
-	win := render3d.Window(c)
-	if ui == nil || win == nil {
+	if ui == nil {
 		return
 	}
 	band := fmt.Sprintf("%.3g GHz", scene.Tx.FreqHz/1e9)
@@ -39,7 +38,7 @@ func updateUI(c *app.Ctx, scene *Scene, eng *Engine) {
 	mat := scene.Sim.Mats.Get(scene.WallMat).Name
 
 	key := band + "|" + engName + "|" + rain + "|" + mat
-	winW, _ := win.GetSize()
+	winW, _ := render3d.WindowSize(c)
 	if key != ui.lastKey {
 		if err := render3d.LoadPanel(c, "ui", buildUIImage(band, engName, rain, mat)); err == nil {
 			ui.lastKey = key

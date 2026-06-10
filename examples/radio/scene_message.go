@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/webgpu"
 )
 
@@ -124,16 +124,16 @@ func bakeMessageLabels(c *app.Ctx, ui *uiState) {
 
 func messageInput(c *app.Ctx) {
 	ui := app.GetResource[uiState](c)
-	for _, ev := range app.ReadEvents[webgpu.KeyEvent](c) {
-		if ev.Action != glfw.Press && ev.Action != glfw.Repeat {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press && ev.Action != inputs.Repeat {
 			continue
 		}
 		switch ev.Key {
-		case glfw.KeyRight:
+		case inputs.KeyRight:
 			ui.msgIdx = (ui.msgIdx + 1) % len(msgPresets)
 			bakeMessageLabels(c, ui)
 			msgPrevSym = -1
-		case glfw.KeyLeft:
+		case inputs.KeyLeft:
 			ui.msgIdx = (ui.msgIdx + len(msgPresets) - 1) % len(msgPresets)
 			bakeMessageLabels(c, ui)
 			msgPrevSym = -1

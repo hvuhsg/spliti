@@ -157,7 +157,7 @@ func newFrameBindGroup(g *GPU) *wgpu.BindGroup {
 		Layout: g.frameBGL,
 		Entries: []wgpu.BindGroupEntry{
 			{Binding: 0, Buffer: g.frameBuf, Offset: 0, Size: frameUBOBytes},
-			{Binding: 1, Buffer: g.pointBuf, Offset: 0, Size: g.pointBuf.GetSize()},
+			{Binding: 1, Buffer: g.pointBuf, Offset: 0, Size: uint64(g.pointCap * pointLightStride)},
 		},
 	})
 	if err != nil {

@@ -9,6 +9,12 @@
 .idea/
 .vscode/
 
+# WebAssembly build output from scripts/build-wasm.sh.
+/web/dist/
+
+# Single-file builds from scripts/build-single.sh (root-level .html only).
+/*.html
+
 # Compiled binaries left in the repo root by `go build`.
 /stick-fight
 /stick-fight-ai
@@ -21,3 +27,8 @@
 /pacman
 /radio
 /radio3d
+/radiosim
+/rf-lab
+/gpu-demo
+/render3d-demo
+/webserve

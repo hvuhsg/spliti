@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>spliti — WebGPU demos</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0d10; color: #e6e6e6;
+      font: 14px/1.4 system-ui, -apple-system, sans-serif; overflow: hidden; }
+    /* The Go backend looks up this canvas by id and reads its CSS size. */
+    #spliti-canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+    #bar { position: fixed; top: 10px; left: 10px; z-index: 10;
+      background: rgba(0,0,0,0.55); padding: 8px 12px; border-radius: 8px; }
+    #bar span { opacity: 0.6; margin-right: 8px; }
+    #bar a { color: #8ab4ff; margin-right: 12px; text-decoration: none; }
+    #bar a.active { color: #fff; font-weight: 600; text-decoration: underline; }
+    #msg { position: fixed; inset: 0; display: flex; align-items: center;
+      justify-content: center; text-align: center; padding: 2rem; }
+    #msg.hidden { display: none; }
+    code { color: #ffd479; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <span>spliti</span>
+    <a href="?demo=gpu-demo" data-demo="gpu-demo">2D · gpu-demo</a>
+    <a href="?demo=render3d-demo" data-demo="render3d-demo">3D · render3d-demo</a>
+    <a href="?demo=radio" data-demo="radio">radio</a>
+    <a href="?demo=radio3d" data-demo="radio3d">radio3d</a>
+    <a href="?demo=radiosim" data-demo="radiosim">radiosim</a>
+    <a href="?demo=rf-lab" data-demo="rf-lab">rf-lab</a>
+  </div>
+  <canvas id="spliti-canvas" tabindex="0"></canvas>
+  <div id="msg">Loading…</div>
+
+  <script src="dist/wasm_exec.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const demo = params.get("demo") || "gpu-demo";
+    document.querySelectorAll("#bar a").forEach(a => {
+      if (a.dataset.demo === demo) a.classList.add("active");
+    });
+    const msg = document.getElementById("msg");
+
+    // Work around cogentcore/webgpu's zero-copy queue writes. Its js backend
+    // builds a Uint8ClampedArray view over Go's wasm linear memory; if Go grows
+    // (and thus detaches) that memory between fetching the buffer and the view's
+    // construction, the construct throws "detached ArrayBuffer" and the program
+    // crashes. We intercept the constructor: when handed a detached buffer
+    // (byteLength 0), retarget to the live wasm memory at the same offset/length
+    // — wasm memory growth preserves contents, so the bytes are still valid.
+    (function patchDetachedBuffer() {
+      const U8C = globalThis.Uint8ClampedArray;
+      globalThis.Uint8ClampedArray = new Proxy(U8C, {
+        construct(target, args) {
+          const buf = args[0];
+          if (buf instanceof ArrayBuffer && buf.byteLength === 0 &&
+              globalThis.wasm?.instance?.exports?.mem?.buffer) {
+            return new target(globalThis.wasm.instance.exports.mem.buffer, args[1], args[2]);
+          }
+          return new target(...args);
+        },
+      });
+    })();
+
+    async function main() {
+      if (!navigator.gpu) {
+        msg.innerHTML = "This browser does not support <b>WebGPU</b>.<br>" +
+          "Use a recent Chrome/Edge, or Firefox with WebGPU enabled.";
+        return;
+      }
+      const go = new Go();
+      try {
+        const result = await WebAssembly.instantiateStreaming(
+          fetch("dist/" + demo + ".wasm"), go.importObject);
+        // cogentcore/webgpu's js backend reads the wasm linear memory zero-copy
+        // through a global named `wasm` (wasm.instance.exports.mem.buffer), e.g.
+        // in queue.WriteBuffer / writeTexture. Expose it before running.
+        globalThis.wasm = result;
+        msg.classList.add("hidden");
+        document.getElementById("spliti-canvas").focus();
+        await go.run(result.instance); // resolves when the game exits (Esc)
+        msg.classList.remove("hidden");
+        msg.innerHTML = "<code>" + demo + "</code> exited. Reload to run again.";
+      } catch (e) {
+        msg.innerHTML = "Failed to load <code>dist/" + demo + ".wasm</code>.<br>" +
+          "Did you run <code>scripts/build-wasm.sh</code>?<br><br>" + e;
+        console.error(e);
+      }
+    }
+    main();
+  </script>
+</body>
+</html>
