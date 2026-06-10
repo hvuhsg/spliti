@@ -108,6 +108,9 @@ CGO_ENABLED=1 go run github.com/hvuhsg/spliti/examples/radiosim       # accurate
 # Same GPU demos in the browser (WebGPU-capable browser required, no cgo)
 scripts/build-wasm.sh                                                  # builds gpu-demo + render3d-demo to web/dist/
 go run github.com/hvuhsg/spliti/cmd/webserve                          # then open http://localhost:8080/?demo=gpu-demo
+
+# Or bundle a game into ONE double-clickable .html (wasm inlined, no server)
+scripts/build-single.sh gpu-demo                                       # writes gpu-demo.html — just open it in a WebGPU browser
 ```
 
 Snake controls: arrow keys or WASD, `q` to quit, `r` to restart on game over.
