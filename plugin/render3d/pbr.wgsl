@@ -1,12 +1,11 @@
 // PBR metallic-roughness shader for the spliti render3d backend (Cook-Torrance).
 //
-// Vertex buffer 0 (per-vertex): position, normal, uv.
+// Vertex buffer 0 (per-vertex): position, normal, uv, tangent (xyz + handedness).
 // Vertex buffer 1 (per-instance): the model matrix as 4 columns (@location 4..7).
 // Bind group 0: frame uniform (camera + directional light + ambient) and the
 //   point-light storage array.
-// Bind group 1: the material uniform.
-//
-// Location 3 (a vertex tangent) is reserved for future normal mapping.
+// Bind group 1: the material uniform (binding 0), base-color / metallic-
+//   roughness / normal textures (bindings 1..3), and a shared sampler (4).
 
 struct Frame {
     view       : mat4x4<f32>,
@@ -27,15 +26,21 @@ struct PointLight {
 
 struct Material {
     baseColor : vec4<f32>, // rgba
-    mr        : vec4<f32>, // x = metallic, y = roughness, zw pad
+    mr        : vec4<f32>, // x = metallic, y = roughness, z = normalScale, w = alphaCutoff
     emissive  : vec4<f32>, // rgb, w unused
+    flags     : vec4<f32>, // x = hasBaseColorTex, y = hasMRTex, z = hasNormalTex, w = alphaMode
 };
 @group(1) @binding(0) var<uniform> material : Material;
+@group(1) @binding(1) var baseColorTex : texture_2d<f32>;
+@group(1) @binding(2) var mrTex        : texture_2d<f32>;
+@group(1) @binding(3) var normalTex    : texture_2d<f32>;
+@group(1) @binding(4) var texSampler   : sampler;
 
 struct VsIn {
     @location(0) position : vec3<f32>,
     @location(1) normal   : vec3<f32>,
     @location(2) uv       : vec2<f32>,
+    @location(3) tangent  : vec4<f32>, // xyz tangent, w handedness sign
     // Per-instance model matrix columns + RGBA tint.
     @location(4) m0   : vec4<f32>,
     @location(5) m1   : vec4<f32>,
@@ -50,6 +55,8 @@ struct VsOut {
     @location(1)       normal   : vec3<f32>,
     @location(2)       uv       : vec2<f32>,
     @location(3)       tint     : vec4<f32>,
+    @location(4)       tangent  : vec3<f32>, // world-space tangent
+    @location(5)       tbnSign  : f32,       // handedness for the bitangent
 };
 
 // normalMatrix returns transpose(inverse(m)), the matrix that transforms normals
@@ -67,13 +74,18 @@ fn vs_main(in : VsIn) -> VsOut {
     let model = mat4x4<f32>(in.m0, in.m1, in.m2, in.m3);
     let world = model * vec4<f32>(in.position, 1.0);
 
-    let nm = normalMatrix(mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz));
+    let upper = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz);
+    let nm = normalMatrix(upper);
 
     var out : VsOut;
     out.worldPos = world.xyz;
     out.normal = normalize(nm * in.normal);
     out.uv = in.uv;
     out.tint = in.tint;
+    // Tangents transform by the model's upper-3x3 (not the inverse-transpose);
+    // they live in the surface plane and follow shear/scale with positions.
+    out.tangent = upper * in.tangent.xyz;
+    out.tbnSign = in.tangent.w;
     out.clip = frame.proj * frame.view * world;
     return out;
 }
@@ -128,11 +140,40 @@ fn shade(N : vec3<f32>, V : vec3<f32>, L : vec3<f32>, radiance : vec3<f32>,
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     // Per-instance tint multiplies the material albedo (and alpha); default tint
     // is opaque white, leaving the material unchanged.
-    let albedo = material.baseColor.rgb * in.tint.rgb;
-    let metallic = clamp(material.mr.x, 0.0, 1.0);
-    let roughness = clamp(material.mr.y, 0.04, 1.0);
+    var albedo = material.baseColor.rgb * in.tint.rgb;
+    var alpha  = material.baseColor.a * in.tint.a;
+    // Base-color texture (sRGB; hardware-linearized on sample). Gate on the flag
+    // so uniform-only materials (default white texture) are unchanged.
+    if (material.flags.x > 0.5) {
+        let t = textureSample(baseColorTex, texSampler, in.uv);
+        albedo *= t.rgb;
+        alpha  *= t.a;
+    }
+    // Alpha-mask cutoff: alphaMode == MASK (flags.w == 2).
+    if (material.flags.w > 1.5 && alpha < material.mr.w) {
+        discard;
+    }
 
-    let N = normalize(in.normal);
+    var metallic = clamp(material.mr.x, 0.0, 1.0);
+    var roughness = clamp(material.mr.y, 0.04, 1.0);
+    // Metallic-roughness texture (linear): glTF packs roughness in G, metallic in B.
+    if (material.flags.y > 0.5) {
+        let mrSample = textureSample(mrTex, texSampler, in.uv);
+        roughness = clamp(roughness * mrSample.g, 0.04, 1.0);
+        metallic  = clamp(metallic * mrSample.b, 0.0, 1.0);
+    }
+
+    var N = normalize(in.normal);
+    // Tangent-space normal mapping. Re-orthonormalize the interpolated tangent
+    // against N (Gram-Schmidt) and build the bitangent with the stored handedness.
+    if (material.flags.z > 0.5) {
+        let T = normalize(in.tangent - N * dot(N, in.tangent));
+        let B = cross(N, T) * in.tbnSign;
+        var tn = textureSample(normalTex, texSampler, in.uv).xyz * 2.0 - 1.0;
+        tn = vec3<f32>(tn.xy * material.mr.z, tn.z);
+        N = normalize(mat3x3<f32>(T, B, N) * tn);
+    }
+
     let V = normalize(frame.cameraPos.xyz - in.worldPos);
     let F0 = mix(vec3<f32>(0.04), albedo, metallic);
 
@@ -174,7 +215,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 
     // Output premultiplied alpha: rgb is scaled by the final alpha so the
     // transparent pipeline's (ONE, ONE_MINUS_SRC_ALPHA) blend is correct. Opaque
-    // draws have alpha 1, so this is a no-op for them.
-    let alpha = material.baseColor.a * in.tint.a;
+    // draws have alpha 1, so this is a no-op for them. alpha was resolved above
+    // (material base alpha * tint, optionally * base-color texture alpha).
     return vec4<f32>(color * alpha, alpha);
 }

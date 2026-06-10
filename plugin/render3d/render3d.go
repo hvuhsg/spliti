@@ -23,9 +23,11 @@
 // Build) and Run must execute on the same (main) goroutine — the normal spliti
 // usage.
 //
-// This is a "solid foundation": the architecture leaves clean seams for later
-// additions (shadow mapping, glTF model loading, material textures, HDR
-// post-processing). It is not those things yet.
+// Models load from glTF/GLB via LoadGLTF / LoadGLTFFS (textured PBR materials —
+// base-color, metallic-roughness, and normal maps — and a node hierarchy
+// rebuilt with SpawnModel). Off-screen entities are skipped each frame by
+// bounding-sphere frustum culling. The architecture still leaves clean seams for
+// further additions (shadow mapping, HDR post-processing, mipmaps).
 package render3d
 
 import (
@@ -153,6 +155,10 @@ type GPU struct {
 	collected []collectedPoint
 	lights    []pointLightGPU
 	frameUBO  [frameUBOFloats]float32
+
+	// viewFrustum is the current frame's six clipping planes, rebuilt each frame
+	// in drawMeshes and used to cull entities whose world bounds fall outside it.
+	viewFrustum frustum
 
 	// Open frame state, shared between the render and present systems (both run on
 	// the main goroutine in PostUpdate). frameActive is false when the surface

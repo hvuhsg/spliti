@@ -10,18 +10,23 @@ import (
 var shaderCode string
 
 // Vertex is one mesh vertex. Field order and size must match the @location
-// bindings in pbr.wgsl: position(12) + normal(12) + uv(8) = 32 bytes.
+// bindings in pbr.wgsl: position(12) + normal(12) + uv(8) + tangent(16) = 48
+// bytes.
 //
-// A tangent (vec4) location is intentionally reserved in the shader for future
-// normal mapping; adding it here changes the stride and every primitive
-// generator, so it is left out of this foundation.
+// The tangent is a vec4: xyz is the (normalized) surface tangent in the
+// direction of increasing U, and w is the handedness sign (+1 or -1) used to
+// reconstruct the bitangent as cross(normal, tangent) * w. It feeds tangent-
+// space normal mapping in the shader; primitive generators emit analytic
+// tangents and the glTF loader either reads TANGENT or derives it via
+// computeTangents.
 type Vertex struct {
-	PX, PY, PZ float32 // position
-	NX, NY, NZ float32 // normal
-	U, V       float32 // texture coordinate
+	PX, PY, PZ     float32 // position
+	NX, NY, NZ     float32 // normal
+	U, V           float32 // texture coordinate
+	TX, TY, TZ, TW float32 // tangent xyz + handedness sign in w
 }
 
-const vertexStride = 32 // bytes; sizeof(Vertex)
+const vertexStride = 48 // bytes; sizeof(Vertex)
 
 // instanceStride is the size of one per-instance record: a model matrix (mat4 =
 // 16 floats = 64 B) followed by an RGBA tint (vec4 = 16 B). Must match
@@ -78,17 +83,40 @@ func buildPipeline(g *GPU) {
 		panic("render3d: frame bgl: " + err.Error())
 	}
 
-	// Bind group 1: per-material uniform (one bind group per registered material).
+	// Bind group 1: per-material uniform (binding 0) + base-color / metallic-
+	// roughness / normal textures (bindings 1..3) and one shared filtering sampler
+	// (binding 4). One bind group per registered material; materials without a
+	// given map bind a shared 1x1 default so the group is always complete.
+	texEntry := func(binding uint32) wgpu.BindGroupLayoutEntry {
+		return wgpu.BindGroupLayoutEntry{
+			Binding:    binding,
+			Visibility: wgpu.ShaderStageFragment,
+			Texture: wgpu.TextureBindingLayout{
+				SampleType:    wgpu.TextureSampleTypeFloat,
+				ViewDimension: wgpu.TextureViewDimension2D,
+			},
+		}
+	}
 	g.materialBGL, err = g.device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
 		Label: "spliti.render3d.material.bgl",
-		Entries: []wgpu.BindGroupLayoutEntry{{
-			Binding:    0,
-			Visibility: wgpu.ShaderStageFragment,
-			Buffer: wgpu.BufferBindingLayout{
-				Type:           wgpu.BufferBindingTypeUniform,
-				MinBindingSize: materialUBOBytes,
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageFragment,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:           wgpu.BufferBindingTypeUniform,
+					MinBindingSize: materialUBOBytes,
+				},
 			},
-		}},
+			texEntry(1), // base color
+			texEntry(2), // metallic-roughness
+			texEntry(3), // normal
+			{
+				Binding:    4,
+				Visibility: wgpu.ShaderStageFragment,
+				Sampler:    wgpu.SamplerBindingLayout{Type: wgpu.SamplerBindingTypeFiltering},
+			},
+		},
 	})
 	if err != nil {
 		panic("render3d: material bgl: " + err.Error())
@@ -179,6 +207,7 @@ func buildRenderPipeline(g *GPU, transparent bool) (*wgpu.RenderPipeline, error)
 						{Format: wgpu.VertexFormatFloat32x3, Offset: 0, ShaderLocation: 0},  // position
 						{Format: wgpu.VertexFormatFloat32x3, Offset: 12, ShaderLocation: 1}, // normal
 						{Format: wgpu.VertexFormatFloat32x2, Offset: 24, ShaderLocation: 2}, // uv
+						{Format: wgpu.VertexFormatFloat32x4, Offset: 32, ShaderLocation: 3}, // tangent
 					},
 				},
 				{ // buffer 1: per-instance model matrix (4x vec4) + RGBA tint
