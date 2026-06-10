@@ -32,3 +32,6 @@
 /gpu-demo
 /render3d-demo
 /webserve
+
+# Compiled example binaries left next to their source by `go build`.
+examples/rf-lab/rf-lab

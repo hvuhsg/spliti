@@ -1,8 +1,11 @@
+//go:build !js
+
 package main
 
 import (
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/examples/radiosim/sim"
+	"github.com/mlange-42/arche/ecs"
 )
 
 const rxBufLen = 180 // received-constellation scatter ring buffer
@@ -18,39 +21,83 @@ type Play struct {
 	SymbolRate float64      // symbols per second (visual)
 	dirty      bool         // recompile requested (graph changed)
 
-	// live, updated each frame by fieldSystem:
-	CurTx    int // index of the symbol being emitted now
-	rx       [rxBufLen]complex128
-	rxHead   int
-	rxFilled int
+	CurTx int // live: index of the symbol being emitted now (set by fieldSystem)
 }
 
 func newPlay() *Play { return &Play{SymbolRate: 2, Mod: sim.QPSK} }
 
-// recompile walks Transmitter ← Constellation ← Text and rebuilds the symbol
-// stream. If the chain is incomplete, Symbols is cleared (nothing to send).
-func (p *Play) recompile(g *Graph) {
-	p.Symbols = nil
-	var tx *Node
-	for _, n := range g.Nodes {
-		if n.Kind == KindTransmitter {
-			tx = n
-			break
+// txChain walks the transmit chain in flow order — Text → Bits → [Error-Correction]
+// → Constellation → Transmitter — and reports whether it is fully wired. The Bits
+// node (text → bits) and the Constellation are required; the Error-Correction node
+// is optional and, when present, is returned as fec (nil otherwise) so its scheme
+// can be read. txt is the message source and con the constellation; ok is false for
+// any incomplete path, so a transmitter with any wire cut radiates nothing at all
+// (see txRadiates / fieldSystem).
+func txChain(g *Graph) (txt, con, fec *Node, ok bool) {
+	order := g.chainNodes() // Text, middle nodes, then Transmitter
+	if len(order) < 4 || order[0].Kind != KindText || order[len(order)-1].Kind != KindTransmitter {
+		return nil, nil, nil, false
+	}
+	txt = order[0]
+	var sawBits bool
+	for _, n := range order[1 : len(order)-1] {
+		switch n.Kind {
+		case KindBits:
+			sawBits = true
+		case KindErrorCorrect:
+			fec = n
+		case KindConstellation:
+			con = n
 		}
 	}
-	if tx == nil {
-		return
+	if !sawBits || con == nil {
+		return nil, nil, nil, false
 	}
-	con := g.inputOf(tx.ID)
-	if con == nil || con.Kind != KindConstellation {
-		return
-	}
-	txt := g.inputOf(con.ID)
-	if txt == nil || txt.Kind != KindText {
+	return txt, con, fec, true
+}
+
+// txRadiates reports whether the transmit chain is fully wired
+// (Text → Bits → [Error-Correction] → Constellation → Transmitter). A transmitter
+// whose chain is severed emits nothing — not even an unmodulated carrier.
+func txRadiates(g *Graph) bool {
+	_, _, _, ok := txChain(g)
+	return ok
+}
+
+// recompile walks the transmit chain and rebuilds the symbol stream: the Bits node
+// turns the message into a bit stream, the Error-Correction node (if wired) adds
+// redundancy with its chosen scheme, and the Constellation packs the coded bits into
+// symbols. If the chain is incomplete, Symbols is cleared (nothing to send).
+func (p *Play) recompile(g *Graph) {
+	p.Symbols = nil
+	txt, con, fec, ok := txChain(g)
+	if !ok {
 		return
 	}
 	p.Mod = con.Mod
-	p.Symbols = textToSymbols(txt.Text, con.Mod)
+	bits := textToBits(txt.Text)
+	if fec != nil {
+		bits = eccEncode(fec.Code, bits)
+	}
+	p.Symbols = bitsToSymbols(bits, con.Mod)
+}
+
+// dataRate reports the transmit chain's bit rates in bits per second: coded is the
+// raw rate crossing the air (symbol clock × bits/symbol), and data is the useful
+// payload rate left after the error-correction overhead (coded × code rate). Both
+// are 0 when the chain isn't fully wired. Cycling the modulation or the FEC scheme
+// moves these live, which is the throughput cost of robustness made visible.
+func (p *Play) dataRate(g *Graph) (coded, data float64) {
+	_, con, fec, ok := txChain(g)
+	if !ok {
+		return 0, 0
+	}
+	coded = p.SymbolRate * float64(bitsPerSymbol(con.Mod))
+	data = coded
+	if fec != nil {
+		data = coded * eccRateFrac(fec.Code)
+	}
+	return coded, data
 }
 
 // symbolAt returns the symbol emitted at time te (seconds). Before playback
@@ -71,33 +118,12 @@ func (p *Play) symIndex(t float64) int {
 	return int(t*p.SymbolRate) % len(p.Symbols)
 }
 
-// pushRx records one received constellation sample (symbol + noise).
-func (p *Play) pushRx(v complex128) {
-	p.rx[p.rxHead] = v
-	p.rxHead = (p.rxHead + 1) % rxBufLen
-	if p.rxFilled < rxBufLen {
-		p.rxFilled++
-	}
-}
-
-// rxPoints copies the received scatter into dst (newest last); returns the count.
-func (p *Play) rxPoints(dst []complex128) int {
-	n := p.rxFilled
-	start := (p.rxHead - n + rxBufLen) % rxBufLen
-	for i := 0; i < n; i++ {
-		dst[i] = p.rx[(start+i)%rxBufLen]
-	}
-	return n
-}
-
-// playbackSystem recompiles a transmitter's chain when its graph has changed.
+// playbackSystem recompiles each transmitter's chain when its graph has changed.
 func playbackSystem(c *app.Ctx) {
-	d := txDevice(c)
-	if d == nil || d.Play == nil {
-		return
-	}
-	if d.Play.dirty {
-		d.Play.recompile(d.Graph)
-		d.Play.dirty = false
-	}
+	app.Query2[TxDevice, txTag](c, func(_ ecs.Entity, d *TxDevice, _ *txTag) {
+		if d.Play != nil && d.Play.dirty {
+			d.Play.recompile(d.Graph)
+			d.Play.dirty = false
+		}
+	})
 }

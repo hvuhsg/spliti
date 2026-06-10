@@ -1,7 +1,8 @@
+//go:build !js
+
 package main
 
 import (
-	"fmt"
 	"image"
 	"image/color"
 	"math"
@@ -9,163 +10,225 @@ import (
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/examples/radiosim/sim"
 	"github.com/hvuhsg/spliti/plugin/render3d"
+	"github.com/mlange-42/arche/ecs"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	"golang.org/x/image/math/fixed"
 )
 
-// HUD caches the last-rendered panel keys so each panel image is only
-// re-rasterized and re-uploaded when its contents actually change.
-type HUD struct {
-	lastReadout string
-	lastConfig  string
-}
-
 const (
-	readoutW, readoutH = 400, 286
-	configW            = 420
-	scopeW, scopeH     = 460, 150
-	margin             = 16
+	scopeW, scopeH = 460, 150
+	specH          = 120 // spectrum strip height, px (sits above the oscilloscope)
+	margin         = 16
 )
 
-// hudSystem rebuilds (when changed) and draws the always-on link readout and, when
-// a marker is selected, its config panel as a drawer on the right edge. Registered
-// as a pre-render system so the panels reflect this frame's state.
-func hudSystem(c *app.Ctx) {
+// spectrum frequency span — the transmitter/receiver tunable band (10–45 MHz).
+const (
+	specFMin = 10e6
+	specFMax = 45e6
+)
+
+// plotsSystem draws the genuinely raster content — the receiver oscilloscope and
+// the constellation panels — via the render3d overlay2d image path, which suits
+// computed plots. The structured readout/config UI and the node editor moved to
+// Dear ImGui (hudUI / editorUI). Registered as a pre-render system so the panels
+// reflect this frame's state.
+func plotsSystem(c *app.Ctx) {
 	ui := app.GetResource[UI](c)
 	if ui != nil && ui.Mode == ModeGraph {
-		drawEditor(c)
-		return
+		return // the ImGui node editor owns the screen in graph mode
 	}
 
-	hud := app.GetResource[HUD](c)
 	lab := app.GetResource[Lab](c)
-	link := app.GetResource[Link](c)
 	field := app.GetResource[Field](c)
-	if hud == nil || lab == nil || link == nil {
-		return
-	}
-	txd := txDevice(c)
-	rxd := rxDevice(c)
-
-	drawReadout(c, hud, lab, link, txd)
-	drawConfig(c, hud, lab, txd, rxd)
 	if field != nil {
 		drawScope(c, field)
 	}
-	if txd != nil && txd.Play != nil {
-		drawConstellations(c, txd.Play, rxd)
+	if lab != nil {
+		drawConstellations(c, lab)
+		drawSpectrum(c, lab)
 	}
 }
 
-// drawConstellations renders the ideal TX constellation (current symbol lit) and
-// the noisy received scatter (with the decoded text), along the bottom, while a
-// message is playing.
-func drawConstellations(c *app.Ctx, play *Play, rxd *RxDevice) {
-	if !play.Playing || len(play.Symbols) == 0 {
-		return
+// specSrc is one transmitter's line in the spectrum: its carrier and transmit power,
+// tinted with the same per-carrier hue the field viz uses.
+type specSrc struct {
+	freq, powerDBm float64
+	r, g, b        float64
+}
+
+// drawSpectrum renders the frequency-domain view above the oscilloscope: each
+// radiating transmitter as a carrier line (height by transmit power, colored by its
+// carrier hue) over the 10–45 MHz band, with the focused receiver's passband
+// (tune ± bandwidth/2) shaded. It makes the front-end filter visible — a carrier
+// outside the shaded window is the one the receiver rejects, so two transmitters on
+// nearby carriers show exactly when they fall in or out of the same channel.
+func drawSpectrum(c *app.Ctx, lab *Lab) {
+	_, h := windowSize(c)
+	var srcs []specSrc
+	app.Query2[TxDevice, txTag](c, func(_ ecs.Entity, d *TxDevice, _ *txTag) {
+		if !txRadiates(d.Graph) {
+			return
+		}
+		r, g, b := freqColor(d.FreqHz)
+		srcs = append(srcs, specSrc{freq: d.FreqHz, powerDBm: sim.DBm(d.PowerW), r: r, g: g, b: b})
+	})
+	tune, bw := 24e6, 1e6
+	if rxd, _, ok := focusRx(c, lab); ok {
+		if tune = rxd.TuneHz; tune <= 0 {
+			tune = 24e6
+		}
+		bw = rxd.BandwidthHz
 	}
+	render3d.LoadPanel(c, "spectrum", buildSpectrum(srcs, tune, bw))
+	render3d.DrawPanel(c, "spectrum", margin, h-scopeH-margin-specH-8, scopeW, specH)
+}
+
+// buildSpectrum rasterizes the spectrum strip: the passband window, the carrier
+// lines, and the band end labels.
+func buildSpectrum(srcs []specSrc, tune, bw float64) image.Image {
+	const w = scopeW
+	img := image.NewRGBA(image.Rect(0, 0, w, specH))
+	fillRect(img, 0, 0, w, specH, color.RGBA{12, 14, 22, 210})
+	fillRect(img, 0, 0, w, 5, color.RGBA{150, 190, 255, 255})
+	accent := color.RGBA{150, 190, 255, 255}
+	drawText(img, 16, 22, "SPECTRUM", accent, 2)
+
+	const pad = 16
+	top, bot := 40, specH-20
+	plotW := w - 2*pad
+	xOf := func(f float64) int {
+		t := clampf((f-specFMin)/(specFMax-specFMin), 0, 1)
+		return pad + int(t*float64(plotW))
+	}
+
+	// Baseline and band-edge labels.
+	fillRect(img, pad, bot, plotW, 1, color.RGBA{50, 60, 80, 255})
+	drawText(img, pad, bot+4, "10", color.RGBA{90, 110, 140, 255}, 1)
+	drawText(img, pad+plotW-14, bot+4, "45", color.RGBA{90, 110, 140, 255}, 1)
+	drawText(img, pad+plotW/2-18, bot+4, "MHz", color.RGBA{90, 110, 140, 255}, 1)
+
+	// Receiver passband: everything inside this shaded window reaches the demodulator;
+	// carriers outside it are rejected by the front-end filter.
+	x1, x2 := xOf(tune-bw/2), xOf(tune+bw/2)
+	if x2 <= x1 {
+		x2 = x1 + 1
+	}
+	fillRect(img, x1, top, x2-x1, bot-top, color.RGBA{40, 70, 60, 120})
+	fillRect(img, xOf(tune), top, 1, bot-top, color.RGBA{120, 220, 170, 200}) // tune center
+
+	// Carrier lines: height encodes transmit power (−90…0 dBm → baseline…top).
+	for _, s := range srcs {
+		x := xOf(s.freq)
+		frac := clampf((s.powerDBm+90)/90, 0.04, 1)
+		barH := int(frac * float64(bot-top))
+		col := color.RGBA{uint8(40 + 215*s.r), uint8(40 + 215*s.g), uint8(40 + 215*s.b), 255}
+		fillRect(img, x-1, bot-barH, 3, barH, col)
+		drawDot(img, x, bot-barH, 2, col)
+	}
+	return img
+}
+
+// drawConstellations renders, along the bottom, a single constellation panel for
+// the current selection: the selected transmitter's ideal constellation (with its
+// current symbol lit) while it is sending, or the selected receiver's received
+// scatter and decoded text. Nothing is shown when nothing is selected.
+func drawConstellations(c *app.Ctx, lab *Lab) {
 	_, fbH := windowSize(c)
 	const sz = 220
+	x := margin + scopeW + 24
 	y := fbH - sz - margin
-	xTx := margin + scopeW + 24
-	xRx := xTx + sz + 16
-	decoded := ""
-	if rxd != nil && rxd.Decode != nil {
-		decoded = rxd.Decode.text()
+	switch lab.Sel {
+	case SelTx:
+		txd := selectedTx(c, lab)
+		if txd == nil || txd.Play == nil || !txd.Play.Playing || len(txd.Play.Symbols) == 0 {
+			return
+		}
+		render3d.LoadPanel(c, "const_tx", buildTxConst(txd.Play))
+		render3d.DrawPanel(c, "const_tx", x, y, sz, sz)
+	case SelRx:
+		rxd := selectedRx(c, lab)
+		if rxd == nil || rxd.Decode == nil {
+			return
+		}
+		// Only plot when the receiver is wired to a constellation — otherwise nothing
+		// demodulates the antenna and there is no scatter to show.
+		con, _, _, _ := rxChain(rxd.Graph)
+		if con == nil {
+			return
+		}
+		render3d.LoadPanel(c, "const_rx", buildRxConst(con.Mod, rxd.Decode))
+		render3d.DrawPanel(c, "const_rx", x, y, sz, sz)
 	}
-	render3d.LoadPanel(c, "const_tx", buildConst(play, true, ""))
-	render3d.DrawPanel(c, "const_tx", xTx, y, sz, sz)
-	render3d.LoadPanel(c, "const_rx", buildConst(play, false, decoded))
-	render3d.DrawPanel(c, "const_rx", xRx, y, sz, sz)
 }
 
-// buildConst rasterizes a constellation panel. tx=true draws the ideal grid with
-// the current symbol highlighted; tx=false draws the faint grid plus the received
-// noisy scatter and the decoded text.
-func buildConst(play *Play, tx bool, decoded string) image.Image {
+// constBase rasterizes the shared constellation backdrop — titled panel, axes, and
+// the faint ideal grid for mod — and returns it with the plot center and scale so
+// the caller can overlay its own points.
+func constBase(mod sim.Modulation, title string, bar color.RGBA) (*image.RGBA, int, int, float64) {
 	const sz = 220
 	img := image.NewRGBA(image.Rect(0, 0, sz, sz))
 	fillRect(img, 0, 0, sz, sz, color.RGBA{10, 14, 20, 215})
-	bar := color.RGBA{120, 220, 255, 255}
-	title := "TX  " + modName(play.Mod)
-	if !tx {
-		bar = color.RGBA{150, 255, 190, 255}
-		title = "RX  " + modName(play.Mod)
-	}
 	fillRect(img, 0, 0, sz, 4, bar)
 	drawText(img, 12, 14, title, bar, 2)
 
 	cx, cy := sz/2, sz/2+14
 	scale := float64(sz/2-30) / 1.5
-	// axes
-	fillRect(img, 16, cy, sz-32, 1, color.RGBA{40, 50, 60, 255})
-	fillRect(img, cx, 40, 1, sz-56, color.RGBA{40, 50, 60, 255})
+	drawConstellationGrid(img, cx, cy, scale, sz/2-16, (sz-56)/2, mod)
+	return img, cx, cy, scale
+}
 
-	ideal := constellation(play.Mod)
-	for _, p := range ideal {
-		px := cx + int(real(p)*scale)
-		py := cy - int(imag(p)*scale)
-		drawDot(img, px, py, 2, color.RGBA{70, 90, 110, 255})
-	}
+// drawConstellationGrid draws the crosshair axes and the faint ideal symbol points
+// for mod, centered at (cx,cy) with the given per-unit scale and axis half-extents.
+// Shared by the HUD constellation panels and the graph's Constellation node so the
+// two always show the same constellation.
+func drawConstellationGrid(img *image.RGBA, cx, cy int, scale float64, halfW, halfH int, mod sim.Modulation) {
+	axis := color.RGBA{40, 50, 60, 255}
+	fillRect(img, cx-halfW, cy, 2*halfW, 1, axis)
+	fillRect(img, cx, cy-halfH, 1, 2*halfH, axis)
+	plotConstellation(img, cx, cy, scale, mod)
+}
 
-	if tx {
-		if play.CurTx >= 0 && play.CurTx < len(play.Symbols) {
-			s := play.Symbols[play.CurTx]
-			drawDot(img, cx+int(real(s)*scale), cy-int(imag(s)*scale), 5, color.RGBA{255, 230, 120, 255})
-		}
-	} else {
-		var buf [rxBufLen]complex128
-		n := play.rxPoints(buf[:])
-		for i := 0; i < n; i++ {
-			p := buf[i]
-			drawDot(img, cx+int(real(p)*scale), cy-int(imag(p)*scale), 1, color.RGBA{130, 255, 175, 200})
-		}
-		// Decoded message so far (fills in over each loop; errors at low SNR).
-		drawText(img, 10, sz-20, clip("> "+decoded, 24), color.RGBA{170, 255, 200, 255}, 2)
+// plotConstellation draws mod's ideal symbol points as faint dots centered at
+// (cx,cy) with the given per-unit scale.
+func plotConstellation(img *image.RGBA, cx, cy int, scale float64, mod sim.Modulation) {
+	for _, p := range constellation(mod) {
+		drawDot(img, cx+int(real(p)*scale), cy-int(imag(p)*scale), 2, color.RGBA{70, 90, 110, 255})
 	}
+}
+
+// buildTxConst draws the transmitter's ideal constellation with its current symbol
+// highlighted.
+func buildTxConst(play *Play) image.Image {
+	img, cx, cy, scale := constBase(play.Mod, "TX  "+modName(play.Mod), color.RGBA{120, 220, 255, 255})
+	if play.CurTx >= 0 && play.CurTx < len(play.Symbols) {
+		s := play.Symbols[play.CurTx]
+		drawDot(img, cx+int(real(s)*scale), cy-int(imag(s)*scale), 5, color.RGBA{255, 230, 120, 255})
+	}
+	return img
+}
+
+// buildRxConst draws the receiver's noisy received scatter (sampled from the wave)
+// over the ideal grid for the receiver's chosen demodulation, plus the message
+// decoded so far (which fills in over each loop and errors at low SNR).
+func buildRxConst(mod sim.Modulation, dec *Decode) image.Image {
+	const sz = 220
+	img, cx, cy, scale := constBase(mod, "RX  "+modName(mod), color.RGBA{150, 255, 190, 255})
+	var buf [rxBufLen]complex128
+	n := dec.rxPoints(buf[:])
+	for i := 0; i < n; i++ {
+		p := buf[i]
+		drawDot(img, cx+int(real(p)*scale), cy-int(imag(p)*scale), 1, color.RGBA{130, 255, 175, 200})
+	}
+	// Keep the decoded line inside the panel: at text scale 2 it is ~28px tall and
+	// ~14px/char wide, so sit it above the bottom edge and clip to the panel width.
+	drawText(img, 10, sz-32, clip("> "+dec.text(), 15), color.RGBA{170, 255, 200, 255}, 2)
 	return img
 }
 
 // drawDot fills a small square centered at (cx,cy) with half-extent rad.
 func drawDot(img *image.RGBA, cx, cy, rad int, col color.RGBA) {
 	fillRect(img, cx-rad, cy-rad, 2*rad+1, 2*rad+1, col)
-}
-
-// drawReadout renders and blits the top-left link-budget panel.
-func drawReadout(c *app.Ctx, hud *HUD, lab *Lab, link *Link, txd *TxDevice) {
-	freq, power := 24e6, 0.0
-	if txd != nil {
-		freq, power = txd.FreqHz, txd.PowerW
-	}
-	dBm := sim.DBm(link.PowerW)
-	key := fmt.Sprintf("%.1f|%.1f|%.1f|%.0f|%.1f", dBm, link.DistM, link.SNRdB,
-		freq/1e6, sim.DBm(power))
-	if key != hud.lastReadout {
-		if err := render3d.LoadPanel(c, "readout", buildReadout(dBm, link, freq, power)); err == nil {
-			hud.lastReadout = key
-		}
-	}
-	render3d.DrawPanel(c, "readout", margin, margin, readoutW, readoutH)
-}
-
-func buildReadout(dBm float64, link *Link, freq, power float64) image.Image {
-	img := image.NewRGBA(image.Rect(0, 0, readoutW, readoutH))
-	fillRect(img, 0, 0, readoutW, readoutH, color.RGBA{12, 16, 24, 215})
-	fillRect(img, 0, 0, readoutW, 5, color.RGBA{80, 200, 255, 255})
-
-	white := color.RGBA{235, 240, 245, 255}
-	dim := color.RGBA{150, 165, 180, 255}
-	accent := color.RGBA{120, 220, 255, 255}
-
-	drawText(img, 20, 22, "RECEIVER LINK", accent, 3)
-	drawText(img, 20, 78, fmt.Sprintf("Pr    %8.1f dBm", dBm), white, 2)
-	drawText(img, 20, 112, fmt.Sprintf("SNR   %8.1f dB", link.SNRdB), white, 2)
-	drawText(img, 20, 146, fmt.Sprintf("dist  %8.1f m", link.DistM), dim, 2)
-	drawText(img, 20, 180, fmt.Sprintf("freq  %8.0f MHz", freq/1e6), dim, 2)
-	drawText(img, 20, 214, fmt.Sprintf("lamda %8.1f m", sim.SpeedOfLight/freq), dim, 2)
-	drawText(img, 20, 248, fmt.Sprintf("Ptx   %8.1f dBm", sim.DBm(power)), dim, 2)
-	return img
 }
 
 // drawScope renders the receiver's oscilloscope (the field sampled at the Rx over
@@ -260,68 +323,6 @@ func sign(v int) int {
 	default:
 		return 0
 	}
-}
-
-// drawConfig renders and blits the right-edge config drawer for the selected
-// device (TX or RX), including the OPEN GRAPH button that enters the editor for
-// that device's chain.
-func drawConfig(c *app.Ctx, hud *HUD, lab *Lab, txd *TxDevice, rxd *RxDevice) {
-	if lab.Sel == SelNone {
-		return
-	}
-	var title, l1, l2 string
-	switch lab.Sel {
-	case SelTx:
-		if txd == nil {
-			return
-		}
-		title = "TRANSMITTER"
-		l1 = fmt.Sprintf("Power  %7.1f dBm", sim.DBm(txd.PowerW))
-		l2 = fmt.Sprintf("Freq   %7.0f MHz", txd.FreqHz/1e6)
-	case SelRx:
-		if rxd == nil {
-			return
-		}
-		title = "RECEIVER"
-		l1 = fmt.Sprintf("Gain   %7.0f dBi", rxd.GainDBi)
-		l2 = fmt.Sprintf("NoiseF %7.1f dB", rxd.NoiseFigDB)
-	}
-
-	// Full-height drawer flush against the right edge of the screen.
-	w, h := windowSize(c)
-	key := fmt.Sprintf("%s|%s|%s|%d", title, l1, l2, h)
-	if key != hud.lastConfig {
-		if err := render3d.LoadPanel(c, "config", buildConfig(title, l1, l2, h)); err == nil {
-			hud.lastConfig = key
-		}
-	}
-	render3d.DrawPanel(c, "config", w-configW, 0, configW, h)
-}
-
-func buildConfig(title, l1, l2 string, configH int) image.Image {
-	img := image.NewRGBA(image.Rect(0, 0, configW, configH))
-	fillRect(img, 0, 0, configW, configH, color.RGBA{16, 14, 22, 224})
-	// Vertical accent stripe on the inner (left) edge — the "drawer" lip.
-	fillRect(img, 0, 0, 6, configH, color.RGBA{255, 200, 90, 255})
-
-	white := color.RGBA{240, 238, 245, 255}
-	dim := color.RGBA{170, 160, 185, 255}
-	accent := color.RGBA{255, 210, 120, 255}
-
-	drawText(img, 28, 28, title, accent, 3)
-
-	drawText(img, 28, 96, l1, white, 3)
-	drawText(img, 28, 138, "up / down", dim, 2)
-
-	drawText(img, 28, 190, l2, white, 3)
-	drawText(img, 28, 232, "left / right", dim, 2)
-
-	// OPEN GRAPH button — local rect matches openGraphButtonRect's drawer-local
-	// position (x − (fbW−configW)).
-	drawButton(img, rect{24, 300, configW - 48, 56}, "OPEN GRAPH", color.RGBA{40, 70, 110, 255})
-
-	drawText(img, 28, configH-34, "drag to move", dim, 2)
-	return img
 }
 
 // windowSize returns the current framebuffer size in pixels (not logical points),

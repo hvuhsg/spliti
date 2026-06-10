@@ -1,3 +1,5 @@
+//go:build !js
+
 package main
 
 import (
@@ -21,6 +23,7 @@ func setup(c *app.Ctx) {
 	must(meshes.Load("ground", render3d.Plane(160, 160, 1, 1)))
 	must(meshes.Load("head", render3d.UVSphere(1.4, 32, 20)))
 	must(meshes.Load("mast", render3d.Cube(1)))
+	must(meshes.Load("block", render3d.Cube(1)))
 	must(meshes.Load("cell", render3d.Quad(cellSize*0.98, cellSize*0.98)))
 
 	must(materials.Load("ground", render3d.Material{
@@ -53,14 +56,22 @@ func setup(c *app.Ctx) {
 		BaseColor: render3d.Color{R: 0.55, G: 0.95, B: 1, A: 1},
 		Emissive:  m.Vec3{X: 0.25, Y: 1.0, Z: 1.3},
 	}))
+	// LoS-blocking obstacle: a matte slab, with a lit "selected" variant.
+	must(materials.Load("block", render3d.Material{
+		BaseColor: render3d.Color{R: 0.22, G: 0.23, B: 0.26, A: 1}, Roughness: 0.85,
+	}))
+	must(materials.Load("block_sel", render3d.Material{
+		BaseColor: render3d.Color{R: 0.45, G: 0.47, B: 0.52, A: 1}, Roughness: 0.7,
+		Emissive: m.Vec3{X: 0.15, Y: 0.16, Z: 0.2},
+	}))
 
 	cmd := c.Commands()
 
 	render3d.SpawnMesh(cmd, render3d.NewTransform3D(m.Vec3{}), "ground", "ground")
 	spawnField(cmd)
 
-	spawnTx(cmd, lab.TxPos)
-	spawnRx(cmd, lab.RxPos)
+	spawnTx(cmd, m.Vec3{X: -30, Y: markerHeight, Z: 0}, lab, false)
+	spawnRx(cmd, m.Vec3{X: 30, Y: markerHeight, Z: 0}, lab, false)
 
 	render3d.SpawnDirectionalLight(cmd, render3d.DirectionalLight{
 		Direction: m.Vec3{X: -0.3, Y: -1, Z: -0.25},
@@ -98,9 +109,10 @@ func spawnFieldCell(cmd *app.Commands, fc fieldCell, t render3d.Transform3D) {
 	})
 }
 
-// spawnTx spawns the transmitter: a tagged, pickable head sphere carrying a
-// TxDevice (its own settings + signal chain), plus a decorative mast.
-func spawnTx(cmd *app.Commands, pos m.Vec3) {
+// spawnTx spawns a transmitter: a tagged, pickable head sphere carrying a
+// TxDevice (its own settings + signal chain), plus a decorative mast. When sel is
+// true the new transmitter becomes the current selection (used for runtime adds).
+func spawnTx(cmd *app.Commands, pos m.Vec3, lab *Lab, sel bool) {
 	head := render3d.NewTransform3D(pos)
 	cmd.Add(func(w *ecs.World) {
 		mp := generic.NewMap6[render3d.Transform3D, render3d.GlobalTransform, render3d.MeshRenderer, render3d.MaterialRef, TxDevice, txTag](w)
@@ -108,12 +120,16 @@ func spawnTx(cmd *app.Commands, pos m.Vec3) {
 			&render3d.MeshRenderer{Mesh: "head"}, &render3d.MaterialRef{Material: "tx"},
 			newTxDevice(), &txTag{})
 		spawnMast(w, e)
+		if sel {
+			lab.Sel, lab.Ent = SelTx, e
+		}
 	})
 }
 
-// spawnRx spawns the receiver: a tagged head sphere carrying an RxDevice (its
-// front-end + decode chain), plus a decorative mast.
-func spawnRx(cmd *app.Commands, pos m.Vec3) {
+// spawnRx spawns a receiver: a tagged head sphere carrying an RxDevice (its
+// front-end + decode chain), plus a decorative mast. When sel is true the new
+// receiver becomes the current selection (used for runtime adds).
+func spawnRx(cmd *app.Commands, pos m.Vec3, lab *Lab, sel bool) {
 	head := render3d.NewTransform3D(pos)
 	cmd.Add(func(w *ecs.World) {
 		mp := generic.NewMap6[render3d.Transform3D, render3d.GlobalTransform, render3d.MeshRenderer, render3d.MaterialRef, RxDevice, rxTag](w)
@@ -121,6 +137,9 @@ func spawnRx(cmd *app.Commands, pos m.Vec3) {
 			&render3d.MeshRenderer{Mesh: "head"}, &render3d.MaterialRef{Material: "rx"},
 			newRxDevice(), &rxTag{})
 		spawnMast(w, e)
+		if sel {
+			lab.Sel, lab.Ent = SelRx, e
+		}
 	})
 }
 

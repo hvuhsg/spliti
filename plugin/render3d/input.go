@@ -25,6 +25,7 @@ func drainEvents(c *app.Ctx, g *GPU) {
 	g.mouseMove = g.mouseMove[:0]
 
 	for _, ev := range g.mouseButton {
+		g.buttonsDown[ev.Button] = ev.Action != inputs.Release
 		app.SendEvent(c, ev)
 	}
 	g.mouseButton = g.mouseButton[:0]

@@ -148,6 +148,11 @@ type GPU struct {
 	// GLFW window.
 	keysDown map[inputs.Key]bool
 
+	// buttonsDown tracks currently-held mouse buttons the same way, so games can
+	// poll held state (MouseButtonDown) even when an overlay UI consumes the
+	// button events themselves.
+	buttonsDown map[inputs.MouseButton]bool
+
 	cursorX, cursorY float64
 
 	// Reusable per-frame scratch (collected renderables, packed model matrices,
@@ -172,6 +177,11 @@ type GPU struct {
 	curEncoder  *wgpu.CommandEncoder
 	curPass     *wgpu.RenderPassEncoder
 	frameActive bool
+
+	// captureSink, when non-nil, requests that the next presented frame be read
+	// back and handed to it. Set via CaptureFrame and cleared by presentSystem once
+	// the frame is delivered.
+	captureSink FrameSink
 }
 
 // sizeDefaults returns the plugin's window size and title with zero values
@@ -218,7 +228,10 @@ func finishBuild(p Plugin, a *app.App, instance *wgpu.Instance, surface *wgpu.Su
 		present = wgpu.PresentModeImmediate
 	}
 	config := &wgpu.SurfaceConfiguration{
-		Usage:       wgpu.TextureUsageRenderAttachment,
+		// CopySrc lets presentSystem read the rendered frame back for screenshots
+		// (see RequestScreenshot). Surface textures support it on the desktop
+		// backends this plugin targets (Metal/Vulkan/D3D12).
+		Usage:       wgpu.TextureUsageRenderAttachment | wgpu.TextureUsageCopySrc,
 		Format:      pickSurfaceFormat(caps.Formats),
 		Width:       uint32(fbw),
 		Height:      uint32(fbh),
@@ -255,6 +268,7 @@ func finishBuild(p Plugin, a *app.App, instance *wgpu.Instance, surface *wgpu.Su
 	cam := defaultCamera(p, float32(fbw)/float32(fbh))
 
 	g.keysDown = make(map[inputs.Key]bool)
+	g.buttonsDown = make(map[inputs.MouseButton]bool)
 
 	meshes := newMeshRegistry(g)
 	materials := newMaterialRegistry(g)
@@ -406,4 +420,16 @@ func KeyDown(c *app.Ctx, key inputs.Key) bool {
 		return false
 	}
 	return g.keysDown[key]
+}
+
+// MouseButtonDown reports whether the mouse button is currently held, tracked
+// from button events. Portable replacement for polling the native window's
+// GetMouseButton; it sees the held state even when an overlay UI (e.g.
+// plugin/ui) captures the button events themselves.
+func MouseButtonDown(c *app.Ctx, btn inputs.MouseButton) bool {
+	g := app.GetResource[GPU](c)
+	if g == nil {
+		return false
+	}
+	return g.buttonsDown[btn]
 }

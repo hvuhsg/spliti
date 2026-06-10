@@ -9,7 +9,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 DIST=web/dist
-DEMOS=(gpu-demo render3d-demo radio radio3d radiosim rf-lab)
+# rf-lab is absent: its Dear ImGui UI (cimgui-go) needs cgo, so it is native-only.
+DEMOS=(gpu-demo render3d-demo radio radio3d radiosim)
 
 mkdir -p "$DIST"
 

@@ -1,3 +1,5 @@
+//go:build !js
+
 package main
 
 import (
@@ -23,22 +25,24 @@ func freeSpacePowerW(powerW, freqHz, gainTx, gainRx, distM float64) float64 {
 	return powerW * gainTx * gainRx * fspl * fspl
 }
 
-// rfSystem recomputes the link budget each frame from the current Lab state and
-// stores it in Link: received power (via Friis), Tx–Rx distance, and the SNR
-// against the receiver's thermal noise floor.
+// rfSystem fills in the only part of the link readout that is pure geometry: the
+// Tx–Rx distance for the focused pair (the selected device and its first
+// counterpart). The signal quantities — received power and SNR — are no longer
+// recomputed here; they are measured from the actual sampled wave by fieldSystem
+// (Link.PowerW / SNRdB / EVMdB), so the panel can never disagree with what the
+// decoder and constellation experience. When either side is missing, distance is
+// zeroed.
 func rfSystem(c *app.Ctx) {
 	lab := app.GetResource[Lab](c)
 	link := app.GetResource[Link](c)
-	txd := txDevice(c)
-	rxd := rxDevice(c)
-	if lab == nil || link == nil || txd == nil || rxd == nil {
+	if lab == nil || link == nil {
 		return
 	}
-	d := float64(lab.RxPos.Sub(lab.TxPos).Length())
-	grx := math.Pow(10, rxd.GainDBi/10) // dBi → linear; Tx assumed isotropic
-	pr := freeSpacePowerW(txd.PowerW, txd.FreqHz, 1, grx, d)
-
-	link.DistM = d
-	link.PowerW = pr
-	link.SNRdB = sim.SNRdB(pr, rxd.rx(lab.RxPos))
+	_, txPos, okt := focusTx(c, lab)
+	_, rxPos, okr := focusRx(c, lab)
+	if !okt || !okr {
+		link.DistM = 0
+		return
+	}
+	link.DistM = float64(rxPos.Sub(txPos).Length())
 }

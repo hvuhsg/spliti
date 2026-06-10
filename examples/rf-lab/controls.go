@@ -1,14 +1,19 @@
+//go:build !js
+
 package main
 
 import (
 	"math"
 
+	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
+	splitiui "github.com/hvuhsg/spliti/plugin/ui"
 	"github.com/mlange-42/arche/ecs"
+	"github.com/mlange-42/arche/generic"
 )
 
 // CamCtl is a fly camera plus the input state for looking and dragging markers.
@@ -67,9 +72,15 @@ func controlsSystem(c *app.Ctx) {
 	}
 	dt := float32(tm.Delta().Seconds())
 
-	handleButtons(c, ctl, lab)
+	// When the pointer/focus is over an ImGui window, let the UI consume that
+	// input instead of selecting markers or adding/removing devices.
+	if !splitiui.WantCaptureMouse(c) {
+		handleButtons(c, ctl, lab)
+	}
 	handleLook(c, ctl)
-	handleConfigKeys(c, lab)
+	if !splitiui.WantCaptureKeyboard(c) {
+		handleDeviceKeys(c, lab)
+	}
 
 	// Camera movement (held keys), relative to view direction but kept horizontal.
 	fwd := ctl.forward()
@@ -102,45 +113,122 @@ func controlsSystem(c *app.Ctx) {
 	if ctl.dragging && lab.Sel != SelNone {
 		dragMarker(c, lab)
 	}
+	finalizeDrop(c, ctl, lab)
 	applyHighlight(c, lab)
 }
 
 // handleButtons resolves clicks: right button toggles mouse-look; left-press
-// raycasts to select a marker (or deselect on empty ground) and begins a drag.
+// raycasts to select whichever marker was hit (or deselect on empty ground) and
+// begins a drag.
 func handleButtons(c *app.Ctx, ctl *CamCtl, lab *Lab) {
-	txE, rxE := markerEntities(c)
+	txMap := generic.NewMap[txTag](c.World())
+	rxMap := generic.NewMap[rxTag](c.World())
+	blockMap := generic.NewMap[blockTag](c.World())
 	for _, ev := range app.ReadEvents[inputs.MouseButtonEvent](c) {
 		switch ev.Button {
 		case inputs.MouseButtonRight:
 			ctl.looking = ev.Action == inputs.Press
 			ctl.haveLast = false
 		case inputs.MouseButtonLeft:
+			// Left-release (drop/trash) is finalized centrally in finalizeDrop, which
+			// also catches releases over the toolbar that ImGui would otherwise eat.
 			if ev.Action == inputs.Release {
-				ctl.dragging = false
 				continue
 			}
 			origin, dir := render3d.ScreenToRay(c, ev.X, ev.Y)
 			hit, ok := render3d.Raycast(c, origin, dir)
 			switch {
-			case ok && hit.Entity == txE:
-				lab.Sel = SelTx
-				ctl.dragging = true
-			case ok && hit.Entity == rxE:
-				lab.Sel = SelRx
-				ctl.dragging = true
+			case ok && txMap.Has(hit.Entity):
+				lab.Sel, lab.Ent, ctl.dragging = SelTx, hit.Entity, true
+			case ok && rxMap.Has(hit.Entity):
+				lab.Sel, lab.Ent, ctl.dragging = SelRx, hit.Entity, true
+			case ok && blockMap.Has(hit.Entity):
+				lab.Sel, lab.Ent, ctl.dragging = SelBlock, hit.Entity, true
 			default:
-				lab.Sel = SelNone
-				ctl.dragging = false
+				lab.Sel, lab.Ent, ctl.dragging = SelNone, ecs.Entity{}, false
 			}
 		}
 	}
 }
 
-// markerEntities returns the transmitter and receiver head entities.
-func markerEntities(c *app.Ctx) (tx, rx ecs.Entity) {
-	app.Query1[txTag](c, func(e ecs.Entity, _ *txTag) { tx = e })
-	app.Query1[rxTag](c, func(e ecs.Entity, _ *rxTag) { rx = e })
-	return tx, rx
+// finalizeDrop resolves a left-button release for both drag flows, polling the
+// button directly so it fires even when the release lands over an ImGui window
+// (which consumes the event). A palette placement spawns the object on the ground
+// (or cancels if dropped back on the toolbar); a marker/block drag removes the
+// entity if dropped on the toolbar, otherwise leaves it where it was dragged.
+func finalizeDrop(c *app.Ctx, ctl *CamCtl, lab *Lab) {
+	dd := app.GetResource[DragDrop](c)
+	if dd == nil || (!dd.placing && !ctl.dragging) {
+		return
+	}
+	if render3d.MouseButtonDown(c, inputs.MouseButtonLeft) {
+		return // still held — keep dragging
+	}
+	mp := imgui.MousePos()
+	overBar := dd.overBar(mp.X, mp.Y)
+	switch {
+	case dd.placing:
+		if !overBar {
+			x, y := render3d.CursorPos(c)
+			placeNew(c, lab, dd.kind, x, y)
+		}
+		dd.placing, dd.kind = false, SelNone
+	case ctl.dragging:
+		if overBar {
+			removeSelected(c, lab)
+		}
+		ctl.dragging = false
+	}
+}
+
+// handleDeviceKeys adds and removes devices: T spawns a transmitter, R spawns a
+// receiver (the new one is selected), and Delete/Backspace removes the current
+// selection along with its mast.
+func handleDeviceKeys(c *app.Ctx, lab *Lab) {
+	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
+		if ev.Action != inputs.Press {
+			continue
+		}
+		switch ev.Key {
+		case inputs.KeyT:
+			spawnTx(c.Commands(), spawnSpot[txTag](c, -30), lab, true)
+		case inputs.KeyR:
+			spawnRx(c.Commands(), spawnSpot[rxTag](c, 30), lab, true)
+		case inputs.KeyB:
+			pos := spawnSpot[blockTag](c, 0)
+			pos.Y = blockH / 2
+			spawnBlock(c.Commands(), pos, lab, true)
+		case inputs.KeyDelete, inputs.KeyBackspace:
+			removeSelected(c, lab)
+		}
+	}
+}
+
+// spawnSpot picks a ground position for a newly added marker of tag T: fixed in
+// X, staggered in Z by how many of that tag already exist so adds don't stack.
+func spawnSpot[T any](c *app.Ctx, x float32) m.Vec3 {
+	n := 0
+	app.Query1[T](c, func(ecs.Entity, *T) { n++ })
+	z := clamp(float32(n)*12-24, -planeHalf, planeHalf)
+	return m.Vec3{X: x, Y: markerHeight, Z: z}
+}
+
+// removeSelected despawns the selected marker and its mast, then clears the
+// selection.
+func removeSelected(c *app.Ctx, lab *Lab) {
+	if lab.Sel == SelNone || lab.Ent.IsZero() {
+		return
+	}
+	ent := lab.Ent
+	cmd := c.Commands()
+	// Despawn the mast(s) parented to this marker so they don't dangle.
+	app.Query1[render3d.Parent](c, func(e ecs.Entity, p *render3d.Parent) {
+		if p.Entity == ent {
+			cmd.Despawn(e)
+		}
+	})
+	cmd.Despawn(ent)
+	lab.Sel, lab.Ent = SelNone, ecs.Entity{}
 }
 
 // handleLook accumulates yaw/pitch from cursor motion while the right button is
@@ -162,87 +250,48 @@ func handleLook(c *app.Ctx, ctl *CamCtl) {
 	}
 }
 
-// handleConfigKeys edits the selected marker's parameters on arrow-key presses
-// (and repeats so holding a key ramps the value). The transmitter's power and
-// frequency, or the receiver's antenna gain and noise figure.
-func handleConfigKeys(c *app.Ctx, lab *Lab) {
-	if lab.Sel == SelNone {
+// dragMarker moves the selected marker to where the cursor ray meets the marker-
+// height plane, clamped to the ground, by writing its transform.
+func dragMarker(c *app.Ctx, lab *Lab) {
+	if lab.Ent.IsZero() {
 		return
 	}
-	txd := txDevice(c)
-	rxd := rxDevice(c)
-	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
-		if ev.Action != inputs.Press && ev.Action != inputs.Repeat {
-			continue
-		}
-		switch {
-		case lab.Sel == SelTx && txd != nil:
-			switch ev.Key {
-			case inputs.KeyUp: // +1 dB
-				txd.PowerW *= math.Pow(10, 0.1)
-			case inputs.KeyDown: // -1 dB
-				txd.PowerW *= math.Pow(10, -0.1)
-			case inputs.KeyRight: // +2 MHz (shorter wavelength)
-				txd.FreqHz += 2e6
-			case inputs.KeyLeft: // -2 MHz (longer wavelength)
-				txd.FreqHz -= 2e6
-			}
-			txd.PowerW = clampf(txd.PowerW, 1e-12, 1e-3) // -90 … 0 dBm
-			txd.FreqHz = clampf(txd.FreqHz, 10e6, 45e6)  // 10–45 MHz (λ 6.7–30 m, visible)
-		case lab.Sel == SelRx && rxd != nil:
-			switch ev.Key {
-			case inputs.KeyUp:
-				rxd.GainDBi += 1
-			case inputs.KeyDown:
-				rxd.GainDBi -= 1
-			case inputs.KeyRight:
-				rxd.NoiseFigDB += 0.5
-			case inputs.KeyLeft:
-				rxd.NoiseFigDB -= 0.5
-			}
-			rxd.GainDBi = clampf(rxd.GainDBi, -10, 30)
-			rxd.NoiseFigDB = clampf(rxd.NoiseFigDB, 0, 20)
-		}
+	tmap := generic.NewMap[render3d.Transform3D](c.World())
+	if !tmap.Has(lab.Ent) {
+		return
 	}
-}
+	tr := tmap.Get(lab.Ent)
 
-// dragMarker moves the selected marker to where the cursor ray meets the marker-
-// height plane, clamped to the ground, updating both its transform and Lab.
-func dragMarker(c *app.Ctx, lab *Lab) {
+	// Markers ride at antenna height; blocks rest on the ground at half their
+	// (possibly resized) height, so each tracks the cursor on its own plane.
+	groundY := float32(markerHeight)
+	if lab.Sel == SelBlock {
+		groundY = tr.Scale.Y / 2
+	}
+
 	x, y := render3d.CursorPos(c)
 	origin, dir := render3d.ScreenToRay(c, x, y)
-	hit, ok := rayPlaneY(origin, dir, markerHeight)
+	hit, ok := rayPlaneY(origin, dir, groundY)
 	if !ok {
 		return
 	}
 	hit.X = clamp(hit.X, -planeHalf, planeHalf)
 	hit.Z = clamp(hit.Z, -planeHalf, planeHalf)
-	hit.Y = markerHeight
-
-	if lab.Sel == SelTx {
-		lab.TxPos = hit
-		setMarkerPos[txTag](c, hit)
-	} else {
-		lab.RxPos = hit
-		setMarkerPos[rxTag](c, hit)
-	}
+	hit.Y = groundY
+	tr.Translation = hit
 }
 
-// setMarkerPos writes the position into the transform of the entity carrying tag T.
-func setMarkerPos[T any](c *app.Ctx, pos m.Vec3) {
-	app.Query2[render3d.Transform3D, T](c, func(_ ecs.Entity, t *render3d.Transform3D, _ *T) {
-		t.Translation = pos
-	})
-}
-
-// applyHighlight swaps each marker's material to its "selected" variant when it is
-// the current selection, and back to the base material otherwise.
+// applyHighlight swaps each marker's material to its "selected" variant for the
+// one selected entity, and back to the base material for every other marker.
 func applyHighlight(c *app.Ctx, lab *Lab) {
-	app.Query2[render3d.MaterialRef, txTag](c, func(_ ecs.Entity, mr *render3d.MaterialRef, _ *txTag) {
-		mr.Material = pick(lab.Sel == SelTx, "tx_sel", "tx")
+	app.Query2[render3d.MaterialRef, txTag](c, func(e ecs.Entity, mr *render3d.MaterialRef, _ *txTag) {
+		mr.Material = pick(lab.Sel == SelTx && e == lab.Ent, "tx_sel", "tx")
 	})
-	app.Query2[render3d.MaterialRef, rxTag](c, func(_ ecs.Entity, mr *render3d.MaterialRef, _ *rxTag) {
-		mr.Material = pick(lab.Sel == SelRx, "rx_sel", "rx")
+	app.Query2[render3d.MaterialRef, rxTag](c, func(e ecs.Entity, mr *render3d.MaterialRef, _ *rxTag) {
+		mr.Material = pick(lab.Sel == SelRx && e == lab.Ent, "rx_sel", "rx")
+	})
+	app.Query2[render3d.MaterialRef, blockTag](c, func(e ecs.Entity, mr *render3d.MaterialRef, _ *blockTag) {
+		mr.Material = pick(lab.Sel == SelBlock && e == lab.Ent, "block_sel", "block")
 	})
 }
 
