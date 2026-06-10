@@ -100,6 +100,15 @@ func pollInput(c *app.Ctx) {
 	}
 }
 
+// windowSize returns the window's logical (screen-coordinate) size, the space
+// mouse-event coordinates live in.
+func (g *GPU) windowSize() (int, int) {
+	if g.plat.window == nil {
+		return 0, 0
+	}
+	return g.plat.window.GetSize()
+}
+
 // platformShutdown destroys the window and terminates GLFW. Called from
 // releaseGPU after the GPU objects are freed.
 func (g *GPU) platformShutdown() {

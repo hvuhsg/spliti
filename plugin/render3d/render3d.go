@@ -141,6 +141,11 @@ type GPU struct {
 	mouseButton []inputs.MouseButtonEvent
 	mouseMove   []inputs.MouseMoveEvent
 
+	// keysDown tracks currently-held keys, updated from key events as they drain,
+	// so games can poll held state (KeyDown) portably instead of the native-only
+	// GLFW window.
+	keysDown map[inputs.Key]bool
+
 	cursorX, cursorY float64
 
 	// Reusable per-frame scratch (collected renderables, packed model matrices,
@@ -242,6 +247,8 @@ func finishBuild(p Plugin, a *app.App, instance *wgpu.Instance, surface *wgpu.Su
 	ensureDepthTarget(g)
 
 	cam := defaultCamera(p, float32(fbw)/float32(fbh))
+
+	g.keysDown = make(map[inputs.Key]bool)
 
 	meshes := newMeshRegistry(g)
 	materials := newMaterialRegistry(g)
@@ -352,11 +359,45 @@ func releaseGPU(g *GPU) {
 }
 
 // Size returns the current framebuffer size in pixels, or 0,0 if the GPU
-// resource is not ready.
+// resource is not ready. This is the native GetFramebufferSize equivalent and
+// works on both native and browser builds.
 func Size(c *app.Ctx) (int, int) {
 	g := app.GetResource[GPU](c)
 	if g == nil {
 		return 0, 0
 	}
 	return int(g.config.Width), int(g.config.Height)
+}
+
+// WindowSize returns the logical (screen-coordinate / CSS-pixel) window size —
+// the space mouse-event coordinates live in. On HiDPI this is smaller than Size.
+// Portable replacement for the native window's GetSize. Returns 0,0 if not ready.
+func WindowSize(c *app.Ctx) (int, int) {
+	g := app.GetResource[GPU](c)
+	if g == nil {
+		return 0, 0
+	}
+	return g.windowSize()
+}
+
+// CursorPos returns the latest cursor position in window (screen) coordinates,
+// the same space as mouse events. Portable replacement for the native window's
+// GetCursorPos.
+func CursorPos(c *app.Ctx) (float64, float64) {
+	g := app.GetResource[GPU](c)
+	if g == nil {
+		return 0, 0
+	}
+	return g.cursorX, g.cursorY
+}
+
+// KeyDown reports whether key is currently held, tracked from key events. This
+// is the portable replacement for polling the native window's GetKey, and works
+// the same on native and in the browser.
+func KeyDown(c *app.Ctx, key inputs.Key) bool {
+	g := app.GetResource[GPU](c)
+	if g == nil {
+		return false
+	}
+	return g.keysDown[key]
 }

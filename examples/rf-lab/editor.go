@@ -314,12 +314,8 @@ func markDirty(g *Graph, play *Play) {
 // uiScale returns framebuffer-px / window-point, so mouse coords (window points)
 // hit-test correctly against the framebuffer-px overlay layout (Retina differs).
 func uiScale(c *app.Ctx) float64 {
-	win := render3d.Window(c)
-	if win == nil {
-		return 1
-	}
-	fw, _ := win.GetFramebufferSize()
-	lw, _ := win.GetSize()
+	fw, _ := render3d.Size(c)       // framebuffer pixels
+	lw, _ := render3d.WindowSize(c) // window points
 	if lw == 0 {
 		return 1
 	}

@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 DIST=web/dist
-DEMOS=(gpu-demo render3d-demo)
+DEMOS=(gpu-demo render3d-demo radio radio3d radiosim rf-lab)
 
 mkdir -p "$DIST"
 

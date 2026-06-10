@@ -1,6 +1,9 @@
 package render3d
 
-import "github.com/hvuhsg/spliti/app"
+import (
+	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/inputs"
+)
 
 // drainEvents forwards the platform-filled input buffers as backend-agnostic
 // plugin/inputs events and clears them. Both the native and js pollInput call it
@@ -8,6 +11,10 @@ import "github.com/hvuhsg/spliti/app"
 // locking is needed.
 func drainEvents(c *app.Ctx, g *GPU) {
 	for _, ev := range g.keyEvents {
+		// Track held keys from key events (Rune == 0); skip typed-text events.
+		if ev.Rune == 0 {
+			g.keysDown[ev.Key] = ev.Action != inputs.Release
+		}
 		app.SendEvent(c, ev)
 	}
 	g.keyEvents = g.keyEvents[:0]

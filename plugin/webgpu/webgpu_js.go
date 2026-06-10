@@ -186,6 +186,15 @@ func pollInput(c *app.Ctx) {
 	drainEvents(c, g)
 }
 
+// windowSize returns the canvas's logical (CSS pixel) size, the space DOM mouse
+// offsetX/offsetY live in.
+func (g *GPU) windowSize() (int, int) {
+	if !g.plat.canvas.Truthy() {
+		return 0, 0
+	}
+	return g.plat.canvas.Get("clientWidth").Int(), g.plat.canvas.Get("clientHeight").Int()
+}
+
 // platformShutdown releases the DOM callbacks. The canvas and WebGPU context are
 // owned by the page and need no explicit teardown.
 func (g *GPU) platformShutdown() {

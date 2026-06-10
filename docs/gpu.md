@@ -213,9 +213,18 @@ That's the canonical GPU-game frame — structurally identical to the terminal f
 ## Convenience accessors
 
 ```go
-win := webgpu.Window(c) // *glfw.Window, native builds only (see Input note)
-w, h := webgpu.Size(c)  // current framebuffer size in pixels (0,0 if not ready)
+w, h := webgpu.Size(c)        // framebuffer size in pixels (== native GetFramebufferSize)
+w, h := webgpu.WindowSize(c)   // logical/CSS size (== native GetSize); mouse-coord space
+x, y := webgpu.CursorPos(c)    // latest cursor position, window coords
+down := webgpu.KeyDown(c, inputs.KeyW) // held-key polling (portable; works in the browser)
+
+win := webgpu.Window(c)        // *glfw.Window — native builds only (see Input note)
 ```
+
+`Size`, `WindowSize`, `CursorPos`, and `KeyDown` are the portable replacements for
+the native window's `GetFramebufferSize`/`GetSize`/`GetCursorPos`/`GetKey`, so a
+game that uses them (instead of `Window`) compiles and runs both natively and in
+the browser. `render3d` exposes the same four.
 
 ## Next
 

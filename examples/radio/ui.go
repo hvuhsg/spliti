@@ -13,16 +13,15 @@ type Clickable struct {
 	Target Scene
 }
 
-// mouseToWorld converts a click in GLFW window coordinates to world coordinates.
+// mouseToWorld converts a click in window coordinates to world coordinates.
 // Dividing by the window size (not the framebuffer size) makes the HiDPI scale
 // cancel, so clicks land correctly on Retina displays.
 func mouseToWorld(c *app.Ctx, x, y float64) (float32, float32) {
-	win := webgpu.Window(c)
 	cam := app.GetResource[webgpu.Camera](c)
-	if win == nil || cam == nil {
+	if cam == nil {
 		return -1, -1
 	}
-	w, h := win.GetSize()
+	w, h := webgpu.WindowSize(c)
 	if w == 0 || h == 0 {
 		return -1, -1
 	}
