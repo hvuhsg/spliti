@@ -52,3 +52,27 @@ func Spawn4[A, B, C, D any](c *Commands, init func(*A, *B, *C, *D)) {
 		}
 	})
 }
+
+// Spawn5 queues entity creation with five components.
+func Spawn5[A, B, C, D, E any](c *Commands, init func(*A, *B, *C, *D, *E)) {
+	c.Add(func(w *ecs.World) {
+		m := generic.NewMap5[A, B, C, D, E](w)
+		ent := m.New()
+		if init != nil {
+			a, b, c, d, e := m.Get(ent)
+			init(a, b, c, d, e)
+		}
+	})
+}
+
+// Spawn6 queues entity creation with six components.
+func Spawn6[A, B, C, D, E, F any](c *Commands, init func(*A, *B, *C, *D, *E, *F)) {
+	c.Add(func(w *ecs.World) {
+		m := generic.NewMap6[A, B, C, D, E, F](w)
+		ent := m.New()
+		if init != nil {
+			a, b, c, d, e, f := m.Get(ent)
+			init(a, b, c, d, e, f)
+		}
+	})
+}

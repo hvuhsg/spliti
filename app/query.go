@@ -43,3 +43,23 @@ func Query4[A, B, C, D any](ctx *Ctx, fn func(ecs.Entity, *A, *B, *C, *D)) {
 		fn(q.Entity(), a, b, c, d)
 	}
 }
+
+// Query5 iterates all entities that have components A, B, C, D and E.
+func Query5[A, B, C, D, E any](ctx *Ctx, fn func(ecs.Entity, *A, *B, *C, *D, *E)) {
+	f := generic.NewFilter5[A, B, C, D, E]()
+	q := f.Query(ctx.world)
+	for q.Next() {
+		a, b, c, d, e := q.Get()
+		fn(q.Entity(), a, b, c, d, e)
+	}
+}
+
+// Query6 iterates all entities that have components A, B, C, D, E and F.
+func Query6[A, B, C, D, E, F any](ctx *Ctx, fn func(ecs.Entity, *A, *B, *C, *D, *E, *F)) {
+	flt := generic.NewFilter6[A, B, C, D, E, F]()
+	q := flt.Query(ctx.world)
+	for q.Next() {
+		a, b, c, d, e, f := q.Get()
+		fn(q.Entity(), a, b, c, d, e, f)
+	}
+}

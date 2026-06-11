@@ -54,6 +54,45 @@ func TestSpawn2CreatesEntityWithTwoComponents(t *testing.T) {
 	}
 }
 
+func TestSpawn6CreatesEntityQueryableAt5And6(t *testing.T) {
+	type C1 struct{ V int }
+	type C2 struct{ V int }
+	type C3 struct{ V int }
+	type C4 struct{ V int }
+	type C5 struct{ V int }
+	type C6 struct{ V int }
+
+	var got5, got6 int
+	var sum int
+	app.New().
+		AddSystems(schedule.Startup, func(c *app.Ctx) {
+			app.Spawn6(c.Commands(), func(a *C1, b *C2, cc *C3, d *C4, e *C5, f *C6) {
+				a.V, b.V, cc.V, d.V, e.V, f.V = 1, 2, 3, 4, 5, 6
+			})
+			app.Spawn5(c.Commands(), func(a *C1, b *C2, cc *C3, d *C4, e *C5) {
+				a.V, b.V, cc.V, d.V, e.V = 10, 20, 30, 40, 50
+			})
+		}).
+		AddSystems(schedule.Update, func(c *app.Ctx) {
+			app.Query5[C1, C2, C3, C4, C5](c, func(_ ecs.Entity, _ *C1, _ *C2, _ *C3, _ *C4, _ *C5) {
+				got5++
+			})
+			app.Query6(c, func(_ ecs.Entity, a *C1, b *C2, cc *C3, d *C4, e *C5, f *C6) {
+				got6++
+				sum = a.V + b.V + cc.V + d.V + e.V + f.V
+			})
+		}).
+		SetMaxFrames(1).
+		Run()
+
+	if got5 != 2 { // both entities have the first five components
+		t.Fatalf("Query5 matched %d entities, want 2", got5)
+	}
+	if got6 != 1 || sum != 21 {
+		t.Fatalf("Query6 matched %d entities (component sum %d), want 1 with sum 21", got6, sum)
+	}
+}
+
 func TestDespawnCommandRemovesEntity(t *testing.T) {
 	var liveAfterDespawn int
 	app.New().
