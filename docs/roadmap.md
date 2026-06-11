@@ -11,9 +11,14 @@ Severity: 🔴 blocking · 🟠 high · 🟡 moderate / genre-dependent
 
 ## 🔴 Blocking — most games need these on day one
 
-- [ ] **Audio plugin** — no sound/music anywhere today. Add a plugin (e.g.
-      `hajimehoshi/oto`) with play/loop/stop, volume, and a small mixer. Fits
-      the existing plugin shape; self-contained.
+- [x] **Audio plugin** — done: `plugin/audio` is a software mixer (per-voice
+      volume/pan/pitch, looping, generation-safe handles, master/sfx/music
+      buses, click-free ramps) over one oto/v3 device, native + browser. WAV/
+      OGG/MP3 decoding, streamed music with fade/crossfade, 2D/3D spatial
+      audio (`audio/spatial3d` ties voices to render3d), silent null-sink
+      fallback for headless runs. See [docs/audio.md](audio.md); Snake plays
+      music + SFX. Still missing (future work): per-voice DSP effects
+      (reverb/filters), and higher-quality resampling than linear.
 - [ ] **Sprite animation** — no frame cycling, tweening, or state-driven
       animation. Add an `Animation` component + system; can lean on the existing
       `time.Time.Alpha()` for smooth interpolation.
@@ -69,12 +74,11 @@ Severity: 🔴 blocking · 🟠 high · 🟡 moderate / genre-dependent
 - [ ] **Parallel scheduling** — engine is single-threaded (`app/app.go:143`);
       out of scope today but a ceiling at high entity counts.
 
-## Suggested first three
+## Suggested next three
 
-1. Audio plugin
-2. Sprite-animation component + system
-3. GPU text rendering
+1. Sprite-animation component + system
+2. GPU text rendering
+3. Held-key / input-action layer
 
 These unblock the most games and are all small, self-contained additions that
-fit the current plugin shape. After that: held-key input state, then a
-grid/quadtree for collision.
+fit the current plugin shape.
