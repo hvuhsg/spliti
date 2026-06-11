@@ -5,11 +5,13 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	gotime "time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/audio"
 	"github.com/hvuhsg/spliti/plugin/defaultplugins"
 	"github.com/hvuhsg/spliti/plugin/input"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
@@ -241,6 +243,9 @@ func snakeStep(c *app.Ctx) {
 		score.Value++
 		s.Grow = true
 		spawnFood(c)
+		// Fine from FixedUpdate in a single-player game; networked games
+		// should trigger audio from Update instead (see docs/network.md).
+		app.GetResource[audio.Audio](c).Play("eat")
 	}
 
 	// Demote previous head's glyph to body style.
@@ -307,17 +312,101 @@ func main() {
 			TargetFrameRate: 60,
 		},
 	})
+	a.AddPlugins(audio.Plugin{})
 
 	app.InsertResource(a, &Snake{})
 	app.InsertResource(a, &Score{})
 	app.InitState(a, Playing)
 
+	a.AddSystems(schedule.Startup, loadSounds)
+
 	app.OnEnter(a, Playing, setupGame)
 	app.OnExit(a, Playing, teardownGame)
+	app.OnEnter(a, Playing, func(c *app.Ctx) {
+		au := app.GetResource[audio.Audio](c)
+		au.PlayMusic("music", audio.MusicOptions{Volume: 0.4, FadeIn: 300 * gotime.Millisecond})
+	})
+	app.OnEnter(a, GameOver, func(c *app.Ctx) {
+		au := app.GetResource[audio.Audio](c)
+		au.Play("gameover")
+		au.StopMusic(500 * gotime.Millisecond)
+	})
 
 	a.AddSystems(schedule.Update, handleInput)
 	a.AddSystems(schedule.FixedUpdate, snakeStep)
 	tui.AddOverlay(a, renderHUD)
 
 	a.Run()
+}
+
+// --- Sounds ----------------------------------------------------------------
+//
+// All three sounds are synthesized here and registered via LoadPCM, so the
+// example ships no binary assets. Real games more typically embed WAV/OGG
+// files and use Registry.Load / LoadFS / LoadStream.
+
+const sndRate = 48000
+
+func loadSounds(c *app.Ctx) {
+	reg := app.GetResource[audio.Registry](c)
+	for ref, pcm := range map[string][]float32{
+		"eat":      blip(880, 90*gotime.Millisecond),
+		"gameover": sweep(440, 110, 500*gotime.Millisecond),
+		"music":    chiptuneLoop(),
+	} {
+		if err := reg.LoadPCM(ref, pcm, 1, sndRate); err != nil {
+			panic(err)
+		}
+	}
+}
+
+// blip is a short sine burst with an exponential decay — the classic coin.
+func blip(freq float64, dur gotime.Duration) []float32 {
+	n := int(dur.Seconds() * sndRate)
+	pcm := make([]float32, n)
+	for i := range pcm {
+		t := float64(i) / sndRate
+		env := math.Exp(-6 * t / dur.Seconds())
+		pcm[i] = float32(0.5 * env * math.Sin(2*math.Pi*freq*t))
+	}
+	return pcm
+}
+
+// sweep glides a sine from one pitch down to another while fading out — the
+// sad trombone of game over.
+func sweep(from, to float64, dur gotime.Duration) []float32 {
+	n := int(dur.Seconds() * sndRate)
+	pcm := make([]float32, n)
+	phase := 0.0
+	for i := range pcm {
+		frac := float64(i) / float64(n)
+		freq := from * math.Pow(to/from, frac)
+		phase += 2 * math.Pi * freq / sndRate
+		pcm[i] = float32(0.5 * (1 - frac) * math.Sin(phase))
+	}
+	return pcm
+}
+
+// chiptuneLoop renders a couple of bars of square-wave arpeggio sized to loop
+// seamlessly (PlayMusic loops by default).
+func chiptuneLoop() []float32 {
+	notes := []int{57, 60, 64, 69, 67, 64, 60, 62, 57, 60, 64, 69, 72, 69, 64, 60} // A-minor arpeggio, MIDI
+	const noteDur = 0.15
+	perNote := int(noteDur * sndRate)
+	pcm := make([]float32, len(notes)*perNote)
+	for ni, midi := range notes {
+		freq := 440 * math.Pow(2, float64(midi-69)/12)
+		for i := 0; i < perNote; i++ {
+			t := float64(i) / sndRate
+			// Short attack/release inside each note so the loop and the
+			// note boundaries never click.
+			env := math.Min(1, t/0.005) * math.Min(1, (noteDur-t)/0.01) * math.Exp(-2*t/noteDur)
+			sq := 1.0
+			if math.Mod(freq*t, 1) > 0.25 { // 25% duty square
+				sq = -1
+			}
+			pcm[ni*perNote+i] = float32(0.22 * env * sq)
+		}
+	}
+	return pcm
 }
