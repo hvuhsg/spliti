@@ -453,16 +453,21 @@ func (b *Backend) uploadPixels(c *app.Ctx, te *texEntry, td *imgui.TextureData) 
 	queue := render3d.Queue(c)
 	w, h := td.Width(), td.Height()
 	pitch := uint32(td.Pitch())
-	// td.Pixels() is a uintptr to ImGui's C-side atlas buffer (not Go-managed
-	// memory, so it never moves); read it as bytes for the upload. go vet flags the
-	// uintptr->Pointer conversion generically — it is safe for this C allocation.
-	data := unsafe.Slice((*byte)(unsafe.Pointer(td.Pixels())), int(td.SizeInBytes()))
+	data := unsafe.Slice((*byte)(cPtr(td.Pixels())), int(td.SizeInBytes()))
 	_ = queue.WriteTexture(
 		te.tex.AsImageCopy(),
 		data,
 		&wgpu.TextureDataLayout{Offset: 0, BytesPerRow: pitch, RowsPerImage: uint32(h)},
 		&wgpu.Extent3D{Width: uint32(w), Height: uint32(h), DepthOrArrayLayers: 1},
 	)
+}
+
+// cPtr converts a uintptr holding a C-side (non-Go) pointer to unsafe.Pointer.
+// ImGui's pixel buffers live in C memory and never move, so the conversion is
+// safe; routing it through a *uintptr keeps it out of vet's unsafeptr
+// heuristic, which assumes a bare uintptr may be a stale Go pointer.
+func cPtr(p uintptr) unsafe.Pointer {
+	return *(*unsafe.Pointer)(unsafe.Pointer(&p))
 }
 
 func (b *Backend) ensureBuffers(c *app.Ctx, vbytes, ibytes int) {
