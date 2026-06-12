@@ -116,12 +116,13 @@ type state struct {
 
 	// play mode (M3): game systems run only while playing; Stop restores the
 	// pre-play snapshot.
-	mode            playMode
-	stepPending     bool // Step clicked; arm next frame
-	stepActive      bool // game systems run this frame despite Paused
-	snapshot        *worldSnapshot
-	gameSystems     []*gameSystem // recorded by the registration interceptor
-	reloadAfterPlay bool          // external scene edit arrived mid-play
+	mode               playMode
+	stepPending        bool // Step clicked; arm next frame
+	stepActive         bool // game systems run this frame despite Paused
+	keepPlayTransforms bool // Stop re-applies played transforms as an edit
+	snapshot           *worldSnapshot
+	gameSystems        []*gameSystem // recorded by the registration interceptor
+	reloadAfterPlay    bool          // external scene edit arrived mid-play
 
 	// rebuild & re-exec lifecycle
 	rebuildNeeded bool

@@ -159,6 +159,9 @@ func playControls(c *app.Ctx, st *state) {
 		} else {
 			imgui.TextColored(imgui.Vec4{X: 0.45, Y: 0.9, Z: 0.5, W: 1}, "PLAYING")
 		}
+		imgui.SameLine()
+		imgui.Checkbox("keep transforms", &st.keepPlayTransforms)
+		imgui.SetItemTooltip("On Stop, re-apply where play moved the named instances\nas one undoable edit (written to the scene file)")
 	}
 }
 
