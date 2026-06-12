@@ -11,6 +11,7 @@
 package editor
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,8 +52,7 @@ type Plugin struct {
 	LoadAssets app.SystemFunc
 	// GameSystems, when set, is invoked during Build with a system
 	// interceptor installed that gates every system it registers behind Play
-	// mode. Until Play mode lands (M3), gated systems never run — the world
-	// stays still for editing.
+	// mode (and its Systems-panel toggle). In Edit mode the world stays still.
 	GameSystems func(a *app.App)
 	// Registry lists the component types the inspector can edit. Nil gets
 	// the engine built-ins only.
@@ -99,6 +99,24 @@ type state struct {
 	// file watcher (external edits → live world)
 	watch *sceneWatcher
 
+	// play mode (M3): game systems run only while playing; Stop restores the
+	// pre-play snapshot.
+	mode            playMode
+	stepPending     bool // Step clicked; arm next frame
+	stepActive      bool // game systems run this frame despite Paused
+	snapshot        *worldSnapshot
+	gameSystems     []*gameSystem // recorded by the registration interceptor
+	reloadAfterPlay bool          // external scene edit arrived mid-play
+
+	// rebuild & re-exec lifecycle
+	rebuildNeeded bool
+	rebuild       rebuildState
+	execOnExit    string // set when a successful rebuild wants a re-exec
+
+	// console
+	console           console
+	consoleAutoScroll bool
+
 	// per-widget Euler cache for quaternion fields (activation-scoped so a
 	// drag never feeds back through the lossy quat→Euler conversion).
 	eulerCache map[string][3]float32
@@ -126,15 +144,16 @@ func newState(p Plugin) *state {
 		registry.Builtin(reg)
 	}
 	return &state{
-		cfg:           p,
-		reg:           reg,
-		op:            gizmo.Translate,
-		cam:           defaultRig(),
-		undo:          undo.NewStack(0),
-		dirty:         make(map[string]time.Time),
-		eulerCache:    make(map[string][3]float32),
-		editBefore:    make(map[string]any),
-		aabbMeshCache: make(map[string][2]m.Vec3),
+		cfg:               p,
+		reg:               reg,
+		op:                gizmo.Translate,
+		cam:               defaultRig(),
+		undo:              undo.NewStack(0),
+		dirty:             make(map[string]time.Time),
+		eulerCache:        make(map[string][3]float32),
+		editBefore:        make(map[string]any),
+		aabbMeshCache:     make(map[string][2]m.Vec3),
+		consoleAutoScroll: true,
 	}
 }
 
@@ -143,17 +162,10 @@ func (p Plugin) Build(a *app.App) {
 	st := newState(p)
 	app.InsertResource(a, st)
 
-	// Game systems register through an interceptor that parks them behind a
-	// run-condition that is false until Play mode exists (M3). Their labels
-	// and ordering are preserved for that day.
+	// Game systems register through an interceptor that records them for the
+	// Systems panel and gates each behind Play mode (and its panel toggle).
 	if p.GameSystems != nil {
-		a.SetSystemInterceptor(func(stage schedule.Stage, cfg *app.SystemConfig) *app.SystemConfig {
-			switch stage {
-			case schedule.Startup, schedule.PreStartup, schedule.PostStartup:
-				return cfg // asset loading and other one-shot setup still runs
-			}
-			return cfg.RunIf(func(*app.Ctx) bool { return false })
-		})
+		a.SetSystemInterceptor(st.interceptGameSystem)
 		p.GameSystems(a)
 		a.SetSystemInterceptor(nil)
 	}
@@ -162,6 +174,7 @@ func (p Plugin) Build(a *app.App) {
 		io := imgui.CurrentIO()
 		io.SetConfigFlags(io.ConfigFlags() | imgui.ConfigFlagsDockingEnable | imgui.ConfigFlagsNavEnableKeyboard)
 		st.installLayoutPersistence(io)
+		st.captureLog()
 		if p.LoadAssets != nil {
 			p.LoadAssets(c)
 		}
@@ -170,6 +183,16 @@ func (p Plugin) Build(a *app.App) {
 		}
 		st.loadSceneSource()
 		st.startWatcher()
+		st.restoreSession(c)
+	})
+
+	// On exit: persist the session, then chain into the rebuilt binary when a
+	// rebuild requested it. Hooks run after window/terminal cleanup.
+	a.AddOnExit(func() {
+		st.saveSession(a.Ctx())
+		if st.execOnExit != "" {
+			execReplace(st.execOnExit)
+		}
 	})
 
 	render3d.AddPreRender(a, func(c *app.Ctx) {
@@ -177,9 +200,11 @@ func (p Plugin) Build(a *app.App) {
 		drawGrid(c)
 		drawSelectionBox(c, st)
 	})
-	a.AddSystems(schedule.First, drainWatcher)
+	a.AddSystems(schedule.First, drainWatcher, checkRebuild)
 	a.AddSystems(schedule.Update, editorUI)
-	a.AddSystems(schedule.Last, flushWriteback)
+	// stepClock must run after the game's own Last systems; it is registered
+	// later, and same-stage order follows insertion order.
+	a.AddSystems(schedule.Last, flushWriteback, stepClock)
 
 	installSmokeHooks(a, st)
 }
@@ -193,15 +218,31 @@ func (st *state) installLayoutPersistence(io *imgui.IO) {
 	}
 	ini := filepath.Join(dir, "imgui.ini")
 	io.SetIniFilename(ini)
-	if _, err := os.Stat(ini); err == nil {
-		st.dockBuilt = true // a saved layout exists; skip the default DockBuilder pass
+	// A saved layout wins over the built-in default — unless it was written
+	// by an editor whose default layout lacked panels added since (they would
+	// float awkwardly over the dock). layoutVersion bumps on every default-
+	// layout change; a mismatch rebuilds the default once.
+	verFile := filepath.Join(dir, "layout.version")
+	ver, _ := os.ReadFile(verFile)
+	if _, err := os.Stat(ini); err == nil && string(bytes.TrimSpace(ver)) == layoutVersion {
+		st.dockBuilt = true
+	} else {
+		os.WriteFile(verFile, []byte(layoutVersion), 0o644)
 	}
 }
+
+// layoutVersion identifies the default dock layout; bump it when adding or
+// removing a docked panel so stale user layouts are rebuilt once.
+const layoutVersion = "2"
 
 // installSmokeHooks wires the headless-verification env hooks (used by CI and
 // scripted runs; inert otherwise): SPLITI_EDITOR_FRAMES bounds the run,
 // SPLITI_EDITOR_SHOT selects the first named instance at frame 60 and saves
-// screenshots at frames 90 and 180 to <prefix>.<frame>.png.
+// screenshots at frames 90 and 180 to <prefix>.<frame>.png,
+// SPLITI_EDITOR_PLAY=1 additionally starts Play at frame 70 and stops at
+// frame 150 (so the screenshots bracket a full play/stop round trip), and
+// SPLITI_EDITOR_REBUILD=1 triggers the rebuild-and-restart flow at frame 100
+// (the variable is cleared first so the re-exec'd child runs it only once).
 func installSmokeHooks(a *app.App, st *state) {
 	if n, _ := strconv.Atoi(os.Getenv("SPLITI_EDITOR_FRAMES")); n > 0 {
 		a.SetMaxFrames(n)
@@ -210,14 +251,30 @@ func installSmokeHooks(a *app.App, st *state) {
 	if shot == "" {
 		return
 	}
+	play := os.Getenv("SPLITI_EDITOR_PLAY") == "1"
 	a.AddSystems(schedule.Update, func(c *app.Ctx) {
 		switch c.App().Frame() {
+		case 5:
+			fmt.Fprintf(os.Stderr, "smoke: editor up (pid %d)\n", os.Getpid())
 		case 60:
 			app.Query1[scene.Name](c, func(e ecs.Entity, n *scene.Name) {
 				if !st.hasSelected {
 					st.selected, st.hasSelected = e, true
 				}
 			})
+		case 70:
+			if play {
+				st.startPlay(c)
+			}
+		case 100:
+			if os.Getenv("SPLITI_EDITOR_REBUILD") == "1" {
+				os.Unsetenv("SPLITI_EDITOR_REBUILD")
+				st.startRebuild(c)
+			}
+		case 150:
+			if play {
+				st.stopPlay(c)
+			}
 		case 90, 180:
 			screenshot.Save(c, fmt.Sprintf("%s.%d.png", shot, c.App().Frame()))
 		}
@@ -232,6 +289,8 @@ func editorUI(c *app.Ctx) {
 	drawHierarchy(c, st)
 	drawInspector(c, st)
 	drawAssets(c, st)
+	drawSystems(c, st)
+	drawConsole(c, st)
 	drawViewport(c, st)
 }
 
@@ -243,6 +302,12 @@ func (st *state) handleShortcuts(c *app.Ctx) {
 	ctrl := io.KeyCtrl() || io.KeySuper()
 	shift := io.KeyShift()
 	switch {
+	case ctrl && imgui.IsKeyPressedBool(imgui.KeyP):
+		if st.mode == modeEdit {
+			st.startPlay(c)
+		} else {
+			st.stopPlay(c)
+		}
 	case ctrl && shift && imgui.IsKeyPressedBool(imgui.KeyZ):
 		st.redo(c)
 	case ctrl && imgui.IsKeyPressedBool(imgui.KeyZ):
@@ -267,6 +332,10 @@ func (st *state) handleShortcuts(c *app.Ctx) {
 }
 
 func (st *state) undoLast(c *app.Ctx) {
+	if st.mode != modeEdit {
+		st.status("undo is disabled during play")
+		return
+	}
 	name, err := st.undo.Undo(c)
 	switch {
 	case err != nil:
@@ -278,6 +347,10 @@ func (st *state) undoLast(c *app.Ctx) {
 }
 
 func (st *state) redo(c *app.Ctx) {
+	if st.mode != modeEdit {
+		st.status("redo is disabled during play")
+		return
+	}
 	name, err := st.undo.Redo(c)
 	switch {
 	case err != nil:
@@ -353,7 +426,7 @@ func (st *state) status(msg string) {
 // markTransformDirty schedules a debounced source write for the instance (the
 // live-scrub path; committed gestures go through cmdTransform instead).
 func (st *state) markTransformDirty(instance string) {
-	if instance == "" || st.src == nil {
+	if instance == "" || st.src == nil || st.mode != modeEdit {
 		return
 	}
 	st.dirty[instance] = time.Now().Add(writebackDebounce)
@@ -361,7 +434,7 @@ func (st *state) markTransformDirty(instance string) {
 
 // touchSource schedules a debounced save of the (already mutated) scene model.
 func (st *state) touchSource() {
-	if st.src == nil || st.srcErr != nil {
+	if st.src == nil || st.srcErr != nil || st.mode != modeEdit {
 		return
 	}
 	st.pendingSave = true

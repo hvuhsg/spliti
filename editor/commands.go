@@ -28,6 +28,15 @@ func (st *state) push(c *app.Ctx, cmd interface {
 	Do(c *app.Ctx) error
 	Undo(c *app.Ctx) error
 }) {
+	// In Play mode edits are live-only and ephemeral (Stop restores the
+	// snapshot), so they bypass the undo stack — an entry would be stale the
+	// moment the world reverts.
+	if st.mode != modeEdit {
+		if err := cmd.Do(c); err != nil {
+			st.status(fmt.Sprintf("%s: %v", cmd.Name(), err))
+		}
+		return
+	}
 	if err := st.undo.Push(c, cmd); err != nil {
 		st.status(fmt.Sprintf("%s: %v", cmd.Name(), err))
 		return
@@ -36,8 +45,9 @@ func (st *state) push(c *app.Ctx, cmd interface {
 }
 
 // scene returns the writable scene model, or nil when the source is read-only.
+// In Play mode it is always nil: play edits never reach the scene file.
 func (st *state) scene() *srcmodel.Scene {
-	if st.src == nil || st.srcErr != nil {
+	if st.src == nil || st.srcErr != nil || st.mode != modeEdit {
 		return nil
 	}
 	return st.src.Scene(st.cfg.Scene)

@@ -36,6 +36,8 @@ func drawShell(c *app.Ctx, st *state) {
 		imgui.Separator()
 		gizmoModeButtons(st)
 		imgui.Separator()
+		playControls(c, st)
+		imgui.Separator()
 
 		undoName, canUndo := st.undo.CanUndo()
 		if !canUndo {
@@ -63,6 +65,10 @@ func drawShell(c *app.Ctx, st *state) {
 		}
 		imgui.Separator()
 
+		editing := st.mode == modeEdit
+		if !editing {
+			imgui.BeginDisabled()
+		}
 		if imgui.Button("Save") {
 			st.saveNow(c, true)
 		}
@@ -71,6 +77,13 @@ func drawShell(c *app.Ctx, st *state) {
 			reloadScene(c, st)
 		}
 		imgui.SetItemTooltip("Re-read the scene file from disk and sync the live world to it")
+		if !editing {
+			imgui.EndDisabled()
+		}
+		if st.rebuildNeeded || st.rebuild.running.Load() {
+			imgui.Separator()
+			rebuildBanner(c, st)
+		}
 		if st.srcErr != nil {
 			imgui.SameLine()
 			imgui.TextColored(imgui.Vec4{X: 1, Y: 0.35, Z: 0.3, W: 1},
@@ -88,13 +101,16 @@ func drawShell(c *app.Ctx, st *state) {
 		imgui.InternalDockBuilderRemoveNode(dockID)
 		imgui.InternalDockBuilderAddNodeV(dockID, imgui.DockNodeFlags(imgui.DockNodeFlagsNone))
 		imgui.InternalDockBuilderSetNodeSize(dockID, imgui.ContentRegionAvail())
-		var left, right, bottom, center imgui.ID
+		var left, right, bottom, lower, center imgui.ID
 		imgui.InternalDockBuilderSplitNode(dockID, imgui.DirLeft, 0.2, &left, &center)
 		imgui.InternalDockBuilderSplitNode(center, imgui.DirRight, 0.28, &right, &center)
+		imgui.InternalDockBuilderSplitNode(center, imgui.DirDown, 0.25, &lower, &center)
 		imgui.InternalDockBuilderSplitNode(left, imgui.DirDown, 0.35, &bottom, &left)
 		imgui.InternalDockBuilderDockWindow("Hierarchy", left)
 		imgui.InternalDockBuilderDockWindow("Assets", bottom)
+		imgui.InternalDockBuilderDockWindow("Systems", bottom)
 		imgui.InternalDockBuilderDockWindow("Inspector", right)
+		imgui.InternalDockBuilderDockWindow("Console", lower)
 		imgui.InternalDockBuilderDockWindow("Scene", center)
 		imgui.InternalDockBuilderFinish(dockID)
 	}
@@ -102,6 +118,61 @@ func drawShell(c *app.Ctx, st *state) {
 	// unconditionally — nil segfaults, pass an empty one.
 	imgui.DockSpaceV(dockID, imgui.Vec2{}, imgui.DockNodeFlagsNone, imgui.NewEmptyWindowClass())
 	imgui.End()
+}
+
+// playControls is the Play/Pause/Step/Stop cluster. Play snapshots the world
+// and starts the game systems; Stop restores the snapshot.
+func playControls(c *app.Ctx, st *state) {
+	switch st.mode {
+	case modeEdit:
+		if imgui.Button("Play") {
+			st.startPlay(c)
+		}
+		imgui.SetItemTooltip("Run the game systems (Ctrl+P); the scene is snapshotted and restored on Stop")
+	case modePlaying, modePaused:
+		label := "Pause"
+		if st.mode == modePaused {
+			label = "Resume"
+		}
+		if imgui.Button(label) {
+			st.togglePause()
+		}
+		if st.mode != modePaused {
+			imgui.BeginDisabled()
+		}
+		if imgui.Button("Step") {
+			st.requestStep()
+		}
+		imgui.SetItemTooltip("Advance the game one frame")
+		if st.mode != modePaused {
+			imgui.EndDisabled()
+		}
+		if imgui.Button("Stop") {
+			st.stopPlay(c)
+		}
+		imgui.SetItemTooltip("Stop and restore the pre-play scene (Ctrl+P)")
+		imgui.SameLine()
+		if st.mode == modePaused {
+			imgui.TextColored(imgui.Vec4{X: 1, Y: 0.8, Z: 0.4, W: 1}, "PAUSED")
+		} else {
+			imgui.TextColored(imgui.Vec4{X: 0.45, Y: 0.9, Z: 0.5, W: 1}, "PLAYING")
+		}
+	}
+}
+
+// rebuildBanner appears when game code changed on disk (or a rebuild is in
+// flight): structural changes need a recompile and re-exec to reach the editor.
+func rebuildBanner(c *app.Ctx, st *state) {
+	if st.rebuild.running.Load() {
+		imgui.TextColored(imgui.Vec4{X: 0.75, Y: 0.8, Z: 1, W: 1}, "rebuilding...")
+		return
+	}
+	imgui.TextColored(imgui.Vec4{X: 1, Y: 0.8, Z: 0.4, W: 1}, "game code changed")
+	imgui.SameLine()
+	if imgui.Button("Rebuild & Restart") {
+		st.startRebuild(c)
+	}
+	imgui.SetItemTooltip("Regenerate and recompile the editor target, then restart with the session restored")
 }
 
 func gizmoModeButtons(st *state) {
