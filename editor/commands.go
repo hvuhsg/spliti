@@ -56,6 +56,32 @@ func (st *state) scene() *srcmodel.Scene {
 // qualName is the component type as written in scene source ("components.Health").
 func qualName(ti *registry.TypeInfo) string { return ti.Pkg + "." + ti.Name }
 
+// entityResolver maps live entity handles to instance names so entity-ref
+// fields encode as spawn variables in scene source.
+func entityResolver(c *app.Ctx) srcmodel.EntityResolver {
+	return func(e ecs.Entity) (string, bool) {
+		n := instanceName(c, e)
+		return n, n != ""
+	}
+}
+
+// varLookup resolves spawn variable names back to live entities when scene.Set
+// literals holding entity references are decoded.
+func (st *state) varLookup(c *app.Ctx) srcmodel.VarLookup {
+	return func(varName string) (ecs.Entity, bool) {
+		sc := st.scene()
+		if sc == nil {
+			return ecs.Entity{}, false
+		}
+		for _, sp := range sc.Spawns {
+			if sp.Var == varName {
+				return entityByInstance(c, sp.Instance)
+			}
+		}
+		return ecs.Entity{}, false
+	}
+}
+
 // resolve finds the live entity for a command target: by instance name when
 // the target is named (handles survive despawn/respawn cycles), by the stored
 // handle otherwise.
@@ -144,7 +170,7 @@ func (cmd *cmdSetComponent) apply(c *app.Ctx, val any, wantLine bool) error {
 		return nil
 	}
 	if wantLine {
-		if err := sc.SetComponentValue(cmd.instance, qualName(ti), reflect.ValueOf(val)); err != nil {
+		if err := sc.SetComponentValueRefs(cmd.instance, qualName(ti), reflect.ValueOf(val), entityResolver(c)); err != nil {
 			st.status(fmt.Sprintf("live-only: %v", err))
 		}
 	} else {
@@ -201,7 +227,7 @@ func (cmd *cmdAddComponent) Do(c *app.Ctx) error {
 			sc.DeleteRemove(cmd.instance, qualName(ti))
 		}
 		zero := reflect.New(ti.Type).Elem()
-		if err := sc.SetComponentValue(cmd.instance, qualName(ti), zero); err != nil {
+		if err := sc.SetComponentValueRefs(cmd.instance, qualName(ti), zero, entityResolver(c)); err != nil {
 			st.status(fmt.Sprintf("live-only: %v", err))
 		}
 	}
@@ -270,7 +296,7 @@ func (cmd *cmdRemoveComponent) Undo(c *app.Ctx) error {
 	if sc := st.scene(); sc != nil && cmd.instance != "" {
 		sc.DeleteRemove(cmd.instance, qualName(ti))
 		if cmd.hadSetLine {
-			sc.SetComponentValue(cmd.instance, qualName(ti), reflect.ValueOf(cmd.before))
+			sc.SetComponentValueRefs(cmd.instance, qualName(ti), reflect.ValueOf(cmd.before), entityResolver(c))
 		}
 	}
 	return nil
@@ -569,7 +595,7 @@ func syncInstanceFromModel(c *app.Ctx, st *state, sp *srcmodel.Spawn) error {
 			continue
 		}
 		v := reflect.New(ti.Type).Elem()
-		if err := srcmodel.ApplyLit(sl.Lit(), v); err != nil {
+		if err := srcmodel.ApplyLitRefs(sl.Lit(), v, st.varLookup(c)); err != nil {
 			st.status(fmt.Sprintf("%s: %v", sp.Instance, err))
 			continue
 		}

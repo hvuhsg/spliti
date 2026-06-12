@@ -40,8 +40,10 @@ type ParentLine struct {
 	stmt                dst.Stmt
 }
 
-// recognizeSet matches `scene.Set(c, ref, pkg.Type{...})`.
-func recognizeSet(stmt dst.Stmt) *SetLine {
+// recognizeSet matches `scene.Set(c, ref, pkg.Type{...})`. vars is the set of
+// spawn variable names declared so far — identifiers naming them inside the
+// literal are entity references, which stay editable.
+func recognizeSet(stmt dst.Stmt, vars map[string]bool) *SetLine {
 	call := exprStmtCall(stmt)
 	if call == nil || !isPkgCall(call, scenePkg, "Set") || len(call.Args) != 3 {
 		return nil
@@ -60,7 +62,7 @@ func recognizeSet(stmt dst.Stmt) *SetLine {
 	}
 	return &SetLine{
 		Type:     typeName,
-		Editable: compositeEditable(lit),
+		Editable: compositeEditable(lit, vars),
 		ref:      ref,
 		stmt:     stmt,
 		lit:      lit,
@@ -220,6 +222,14 @@ func sanitizeIdent(s string) string {
 // literal's component type, replacing the existing line's literal or inserting
 // a new statement right after the instance's last recognized line.
 func (s *Scene) SetComponent(instance string, lit *dst.CompositeLit) error {
+	return s.setComponentRefs(instance, lit, nil)
+}
+
+// setComponentRefs is SetComponent constrained by entity references: the line
+// must sit after the spawn statement of every instance in refInstances, or the
+// emitted variable references would not compile (declare before use). An
+// existing line in too early a position is moved.
+func (s *Scene) setComponentRefs(instance string, lit *dst.CompositeLit, refInstances []string) error {
 	typeName := exprName(lit.Type)
 	if typeName == "" {
 		return fmt.Errorf("srcmodel: composite literal has no recognizable type")
@@ -228,15 +238,33 @@ func (s *Scene) SetComponent(instance string, lit *dst.CompositeLit) error {
 	if sp == nil {
 		return fmt.Errorf("srcmodel: scene %q has no instance %q", s.Name, instance)
 	}
+	// Recomputed after every mutation: rescans shift statement indices.
+	minIdx := func() int {
+		min := -1
+		for _, ref := range refInstances {
+			if rp := s.Spawn(ref); rp != nil {
+				if i := s.stmtIndex(rp.stmt); i > min {
+					min = i
+				}
+			}
+		}
+		return min
+	}
 	if sl := sp.Set(typeName); sl != nil {
 		if !sl.Editable {
 			return fmt.Errorf("srcmodel: instance %q: scene.Set(%s) is not a literal override", instance, typeName)
 		}
-		lit.Decs.NodeDecs = *sl.lit.Decorations()
-		call := exprStmtCall(sl.stmt)
-		call.Args[2] = lit
+		if s.stmtIndex(sl.stmt) >= minIdx() {
+			lit.Decs.NodeDecs = *sl.lit.Decorations()
+			call := exprStmtCall(sl.stmt)
+			call.Args[2] = lit
+			s.rescan()
+			return nil
+		}
+		// The new literal references a spawn declared after the existing line:
+		// drop it and reinsert below.
+		s.deleteStmts(sl.stmt)
 		s.rescan()
-		return nil
 	}
 	varName, err := s.EnsureVar(instance)
 	if err != nil {
@@ -248,7 +276,11 @@ func (s *Scene) SetComponent(instance string, lit *dst.CompositeLit) error {
 	}}
 	stmt.Decs.Before = dst.NewLine
 	stmt.Decs.After = dst.NewLine
-	s.insertAfter(s.lastStmtOf(instance), stmt)
+	at := s.lastStmtOf(instance)
+	if m := minIdx(); m > at {
+		at = m
+	}
+	s.insertAfter(at, stmt)
 	s.rescan()
 	return nil
 }
@@ -446,7 +478,7 @@ func (s *Scene) RemoveSpawn(instance string) (*RemovedSpawn, error) {
 				continue
 			}
 			if referencesIdent(stmt, sp.Var) {
-				return nil, fmt.Errorf("srcmodel: instance %q: variable %s is referenced by hand-written code; delete that reference first", instance, sp.Var)
+				return nil, fmt.Errorf("srcmodel: instance %q: variable %s is still referenced elsewhere in the scene; clear that reference first", instance, sp.Var)
 			}
 		}
 	}

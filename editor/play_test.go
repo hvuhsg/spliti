@@ -22,10 +22,19 @@ func TestSnapshotRestore(t *testing.T) {
 	ti.SetValue(c.World(), crate1, Health{Max: 50, Current: 30})
 	wantT := *tm.Get(crate1)
 
+	// An entity reference + slice in a game component: the restore must remap
+	// the handle and the snapshot must not share the slice's backing array.
+	ground, _ := entityByInstance(c, "ground")
+	sk := st.reg.Lookup("Seeker")
+	sk.SetValue(c.World(), ground, Seeker{Target: crate1, Waypoints: []m.Vec3{{X: 1}}})
+
 	snap := takeSnapshot(c, st.reg)
 
-	// "Play": move crate1, kill lamp, spawn a play-only bullet.
+	// "Play": move crate1, kill lamp, spawn a play-only bullet, and scribble
+	// over the Seeker's slice in place.
 	tm.Get(crate1).Translation.X = 99
+	sm := generic.NewMap[Seeker](c.World())
+	sm.Get(ground).Waypoints[0].X = -42
 	lamp, _ := entityByInstance(c, "lamp")
 	despawnSubtree(c, lamp)
 	bullet := c.World().NewEntity()
@@ -55,6 +64,17 @@ func TestSnapshotRestore(t *testing.T) {
 	}
 	if c.World().Alive(bullet) {
 		t.Fatal("play-created entity survived restore")
+	}
+	ground, ok = entityByInstance(c, "ground")
+	if !ok {
+		t.Fatal("ground missing after restore")
+	}
+	got := sk.Value(c.World(), ground).(Seeker)
+	if got.Target != crate1 {
+		t.Fatalf("Seeker.Target = %v, want remapped crate1 %v", got.Target, crate1)
+	}
+	if len(got.Waypoints) != 1 || got.Waypoints[0].X != 1 {
+		t.Fatalf("Seeker.Waypoints not deep-copied: %+v", got.Waypoints)
 	}
 }
 

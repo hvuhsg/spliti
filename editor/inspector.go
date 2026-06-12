@@ -3,6 +3,7 @@ package editor
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/AllenDang/cimgui-go/imgui"
@@ -10,6 +11,7 @@ import (
 	"github.com/hvuhsg/spliti/editor/registry"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
+	"github.com/hvuhsg/spliti/scene"
 	"github.com/mlange-42/arche/ecs"
 )
 
@@ -59,33 +61,61 @@ func drawInspector(c *app.Ctx, st *state) {
 	drawAddComponent(c, st, e, inst)
 }
 
-// drawComponent renders one component's fields and handles gesture capture.
+// fieldCtx carries what a field widget needs to commit its edit: the component
+// identity plus the pre-draw value that becomes the undo "before".
+type fieldCtx struct {
+	c    *app.Ctx
+	st   *state
+	e    ecs.Entity
+	inst string
+	ti   *registry.TypeInfo
+	pre  any    // component value before any widget wrote this frame
+	key  string // gesture key: entity + component
+}
+
+// drawComponent renders one component's fields.
 func drawComponent(c *app.Ctx, st *state, e ecs.Entity, inst string, ti *registry.TypeInfo) {
 	w := c.World()
 	// Pre-draw snapshot: the gesture's "before" value must be read before any
 	// widget writes into live storage this frame.
-	pre := ti.Value(w, e)
-	gestureKey := fmt.Sprintf("%v/%s", e, ti.Name)
-
+	fc := fieldCtx{
+		c: c, st: st, e: e, inst: inst, ti: ti,
+		pre: ti.Value(w, e),
+		key: fmt.Sprintf("%v/%s", e, ti.Name),
+	}
 	comp := ti.Get(w, e)
 	for _, f := range ti.Fields {
-		drawField(st, e, ti, f, f.Value(comp))
-		if imgui.IsItemActivated() {
-			if _, ok := st.editBefore[gestureKey]; !ok {
-				st.editBefore[gestureKey] = pre
-			}
-		}
-		if imgui.IsItemDeactivatedAfterEdit() {
-			before, ok := st.editBefore[gestureKey]
-			if !ok {
-				before = pre
-			}
-			delete(st.editBefore, gestureKey)
-			st.commitComponentEdit(c, e, inst, ti, before)
-		} else if imgui.IsItemDeactivated() {
-			delete(st.editBefore, gestureKey)
+		drawField(fc, f.Name, f.Kind, f.Value(comp))
+	}
+}
+
+// gesture tracks the drag/scrub lifecycle of the most recent widget item:
+// the "before" value is pinned on activation, and one undo command is pushed
+// when the gesture ends with a change. Call it right after every leaf widget.
+func (fc fieldCtx) gesture() {
+	st := fc.st
+	if imgui.IsItemActivated() {
+		if _, ok := st.editBefore[fc.key]; !ok {
+			st.editBefore[fc.key] = fc.pre
 		}
 	}
+	if imgui.IsItemDeactivatedAfterEdit() {
+		before, ok := st.editBefore[fc.key]
+		if !ok {
+			before = fc.pre
+		}
+		delete(st.editBefore, fc.key)
+		st.commitComponentEdit(fc.c, fc.e, fc.inst, fc.ti, before)
+	} else if imgui.IsItemDeactivated() {
+		delete(st.editBefore, fc.key)
+	}
+}
+
+// commitNow pushes an immediate (single-click) edit: the value was already
+// written into live storage this frame, and the pre-draw snapshot is the
+// "before". Used by buttons and pickers, which have no drag gesture.
+func (fc fieldCtx) commitNow() {
+	fc.st.commitComponentEdit(fc.c, fc.e, fc.inst, fc.ti, fc.pre)
 }
 
 // commitComponentEdit pushes the finished gesture as one undo command.
@@ -133,96 +163,185 @@ func drawAddComponent(c *app.Ctx, st *state, e ecs.Entity, inst string) {
 	imgui.EndPopup()
 }
 
-// drawField renders the widget for one field and returns whether it changed
-// the value this frame. Values write straight into live component storage.
-func drawField(st *state, e ecs.Entity, ti *registry.TypeInfo, f registry.Field, v reflect.Value) bool {
-	switch f.Kind {
+// drawField renders the widget for one field. Leaf values write straight into
+// live component storage and commit through the gesture tracker; structural
+// edits (slice add/remove, entity picks) commit immediately.
+func drawField(fc fieldCtx, name string, kind registry.FieldKind, v reflect.Value) {
+	switch kind {
 	case registry.KindFloat32, registry.KindFloat64:
 		f32 := float32(v.Float())
-		if imgui.DragFloatV(f.Name, &f32, dragSpeed(f), 0, 0, "%.3f", 0) {
+		if imgui.DragFloatV(name, &f32, dragSpeed, 0, 0, "%.3f", 0) {
 			v.SetFloat(float64(f32))
-			return true
 		}
+		fc.gesture()
 	case registry.KindInt:
 		iv := int32(intOf(v))
-		if imgui.DragInt(f.Name, &iv) {
+		if imgui.DragInt(name, &iv) {
 			setInt(v, int64(iv))
-			return true
 		}
+		fc.gesture()
 	case registry.KindBool:
 		b := v.Bool()
-		if imgui.Checkbox(f.Name, &b) {
+		if imgui.Checkbox(name, &b) {
 			v.SetBool(b)
-			return true
 		}
+		fc.gesture()
 	case registry.KindString:
 		s := v.String()
-		if imgui.InputTextWithHint(f.Name, "", &s, 0, nil) {
+		if imgui.InputTextWithHint(name, "", &s, 0, nil) {
 			v.SetString(s)
-			return true
 		}
+		fc.gesture()
 	case registry.KindVec2:
 		vec := v.Interface().(m.Vec2)
 		arr := [2]float32{vec.X, vec.Y}
-		if imgui.DragFloat2(f.Name, &arr) {
+		if imgui.DragFloat2(name, &arr) {
 			v.Set(reflect.ValueOf(m.Vec2{X: arr[0], Y: arr[1]}))
-			return true
 		}
+		fc.gesture()
 	case registry.KindVec3:
 		vec := v.Interface().(m.Vec3)
 		arr := [3]float32{vec.X, vec.Y, vec.Z}
-		if imgui.DragFloat3V(f.Name, &arr, dragSpeed(f), 0, 0, "%.3f", 0) {
+		if imgui.DragFloat3V(name, &arr, dragSpeed, 0, 0, "%.3f", 0) {
 			v.Set(reflect.ValueOf(m.Vec3{X: arr[0], Y: arr[1], Z: arr[2]}))
-			return true
 		}
+		fc.gesture()
 	case registry.KindVec4:
 		vec := v.Interface().(m.Vec4)
 		arr := [4]float32{vec.X, vec.Y, vec.Z, vec.W}
-		if imgui.DragFloat4(f.Name, &arr) {
+		if imgui.DragFloat4(name, &arr) {
 			v.Set(reflect.ValueOf(m.Vec4{X: arr[0], Y: arr[1], Z: arr[2], W: arr[3]}))
-			return true
 		}
+		fc.gesture()
 	case registry.KindQuat:
-		return drawQuatField(st, e, ti, f, v)
+		drawQuatField(fc, name, v)
 	case registry.KindEntity:
-		ent := v.Interface().(ecs.Entity)
-		imgui.TextDisabled(fmt.Sprintf("%s: entity %v", f.Name, ent))
+		drawEntityField(fc, name, v)
+	case registry.KindSlice:
+		drawSliceField(fc, name, v)
 	default:
-		imgui.TextDisabled(fmt.Sprintf("%s: (not editable)", f.Name))
+		imgui.TextDisabled(fmt.Sprintf("%s: (not editable)", name))
 	}
-	return false
 }
 
 // drawQuatField edits a quaternion as Euler degrees. The displayed angles come
 // from an activation-scoped cache: while the user is dragging, the cache —
 // not the lossy quat→Euler conversion of the value just written — feeds the
 // widget, so the numbers never feed back or jump mid-drag.
-func drawQuatField(st *state, e ecs.Entity, ti *registry.TypeInfo, f registry.Field, v reflect.Value) bool {
-	key := fmt.Sprintf("%v/%s/%s", e, ti.Name, f.Name)
+func drawQuatField(fc fieldCtx, name string, v reflect.Value) {
+	key := fmt.Sprintf("%s/%s", fc.key, name)
 	q := v.Interface().(m.Quat)
 
-	arr, cached := st.eulerCache[key]
+	arr, cached := fc.st.eulerCache[key]
 	if !cached {
 		p, y, r := q.ToEuler()
 		arr = [3]float32{degOf(p), degOf(y), degOf(r)}
 	}
-	changed := imgui.DragFloat3V(f.Name+" (deg)", &arr, 0.5, 0, 0, "%.2f", 0)
+	changed := imgui.DragFloat3V(name+" (deg)", &arr, 0.5, 0, 0, "%.2f", 0)
 	if imgui.IsItemActive() {
-		st.eulerCache[key] = arr
+		fc.st.eulerCache[key] = arr
 	} else {
-		delete(st.eulerCache, key)
+		delete(fc.st.eulerCache, key)
 	}
 	if changed {
 		v.Set(reflect.ValueOf(m.FromEuler(
 			m.DegToRad(arr[0]), m.DegToRad(arr[1]), m.DegToRad(arr[2]))))
-		return true
 	}
-	return false
+	fc.gesture()
 }
 
-func dragSpeed(f registry.Field) float32 {
-	return 0.05
+// drawEntityField is a combo of named scene instances (entity-ref fields can
+// only persist references to named instances; "(none)" is the zero handle).
+func drawEntityField(fc fieldCtx, name string, v reflect.Value) {
+	cur := v.Interface().(ecs.Entity)
+	label := "(none)"
+	if n := instanceName(fc.c, cur); n != "" {
+		label = n
+	} else if cur != (ecs.Entity{}) {
+		label = fmt.Sprintf("entity %v (unnamed)", cur)
+	}
+	if !imgui.BeginCombo(name, label) {
+		return
+	}
+	if imgui.SelectableBool("(none)") && cur != (ecs.Entity{}) {
+		v.Set(reflect.ValueOf(ecs.Entity{}))
+		fc.commitNow()
+	}
+	for _, it := range namedInstances(fc.c) {
+		sel := it.e == cur
+		if imgui.SelectableBoolV(it.name, sel, 0, imgui.Vec2{}) && !sel {
+			v.Set(reflect.ValueOf(it.e))
+			fc.commitNow()
+		}
+	}
+	imgui.EndCombo()
 }
+
+// drawSliceField renders a slice as a tree of per-element widgets with
+// add/remove buttons. Element value edits ride the normal gesture commit;
+// length changes commit immediately.
+func drawSliceField(fc fieldCtx, name string, v reflect.Value) {
+	// "###" keeps the tree's ID stable while the label shows the live length.
+	if !imgui.TreeNodeExStr(fmt.Sprintf("%s [%d]###%s", name, v.Len(), name)) {
+		return
+	}
+	elem := v.Type().Elem()
+	elemKind := registry.KindOf(elem)
+	remove := -1
+	for i := 0; i < v.Len(); i++ {
+		imgui.PushIDInt(int32(i))
+		if imgui.SmallButton("x") {
+			remove = i
+		}
+		imgui.SameLine()
+		ev := v.Index(i)
+		label := fmt.Sprintf("%d", i)
+		switch {
+		case elemKind != registry.KindOpaque:
+			drawField(fc, label, elemKind, ev)
+		case elem.Kind() == reflect.Struct:
+			if imgui.TreeNodeExStr(label) {
+				for _, sf := range registry.FieldsOf(elem) {
+					drawField(fc, sf.Name, sf.Kind, sf.Value(ev))
+				}
+				imgui.TreePop()
+			}
+		default:
+			imgui.TextDisabled("(not editable)")
+		}
+		imgui.PopID()
+	}
+	if imgui.SmallButton("+ add") {
+		v.Set(reflect.Append(v, reflect.New(elem).Elem()))
+		fc.commitNow()
+	}
+	if remove >= 0 {
+		n := v.Len()
+		out := reflect.MakeSlice(v.Type(), 0, n-1)
+		out = reflect.AppendSlice(out, v.Slice(0, remove))
+		out = reflect.AppendSlice(out, v.Slice(remove+1, n))
+		v.Set(out)
+		fc.commitNow()
+	}
+	imgui.TreePop()
+}
+
+// namedInstances lists the scene's named entities sorted by instance name.
+func namedInstances(c *app.Ctx) []namedEntity {
+	var out []namedEntity
+	app.Query1[scene.Name](c, func(e ecs.Entity, n *scene.Name) {
+		out = append(out, namedEntity{n.Value, e})
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
+	return out
+}
+
+type namedEntity struct {
+	name string
+	e    ecs.Entity
+}
+
+const dragSpeed = 0.05
 
 func degOf(rad float32) float32 { return rad * (180 / 3.14159265358979) }
 

@@ -123,3 +123,4 @@ a.AddPlugins(defaultplugins.Plugins{
 - [docs/events-and-states.md](events-and-states.md) covers events and state machines (`Playing` → `GameOver` → `Playing` patterns).
 - The `examples/snake` source is the next-step exercise — every concept above is in there.
 - For multiplayer, [docs/network.md](network.md) ties it all together.
+- For a 3D game with a visual scene editor, skip the manual setup: `spliti new mygame && cd mygame && spliti edit` — see [docs/editor.md](editor.md).

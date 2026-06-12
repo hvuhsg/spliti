@@ -256,15 +256,17 @@ func (s *Scene) rescan() {
 		return
 	}
 	byVar := map[string]*Spawn{}
+	vars := map[string]bool{}
 	for _, stmt := range s.fn.Body.List {
 		if sp := recognizeSpawn(stmt); sp != nil {
 			s.Spawns = append(s.Spawns, sp)
 			if sp.Var != "" {
 				byVar[sp.Var] = sp
+				vars[sp.Var] = true
 			}
 			continue
 		}
-		if sl := recognizeSet(stmt); sl != nil {
+		if sl := recognizeSet(stmt, vars); sl != nil {
 			if sp := byVar[sl.ref]; sp != nil {
 				sp.Sets = append(sp.Sets, sl)
 			}

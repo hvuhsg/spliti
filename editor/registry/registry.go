@@ -43,8 +43,8 @@ type TypeInfo struct {
 	Get func(w *ecs.World, e ecs.Entity) reflect.Value
 	// Add attaches the type's zero-ish default to the entity.
 	Add func(w *ecs.World, e ecs.Entity)
-	// Value returns a copy of the live component (components are plain structs,
-	// so a value copy is a deep copy) — undo snapshots use this.
+	// Value returns a deep copy of the live component — undo records and play
+	// snapshots use this, so it must share no mutable memory with storage.
 	Value func(w *ecs.World, e ecs.Entity) any
 	// SetValue writes a captured value back, attaching the component first when
 	// absent. Values of the wrong dynamic type are ignored.
@@ -65,6 +65,7 @@ func Register[T any](r *Registry, name, pkg string) {
 		return
 	}
 	rt := reflect.TypeFor[T]()
+	deep := typeNeedsDeepCopy(rt)
 	ti := &TypeInfo{
 		Name: name,
 		Pkg:  pkg,
@@ -88,12 +89,19 @@ func Register[T any](r *Registry, name, pkg string) {
 		},
 		Value: func(w *ecs.World, e ecs.Entity) any {
 			mp := generic.NewMap[T](w)
-			return *mp.Get(e)
+			val := *mp.Get(e)
+			if deep {
+				return deepCopyAny(val)
+			}
+			return val
 		},
 		SetValue: func(w *ecs.World, e ecs.Entity, val any) {
 			v, ok := val.(T)
 			if !ok {
 				return
+			}
+			if deep {
+				v = deepCopyAny(v).(T)
 			}
 			mp := generic.NewMap[T](w)
 			if mp.Has(e) {
