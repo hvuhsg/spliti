@@ -3,6 +3,7 @@ package srcmodel
 import (
 	"fmt"
 	"go/token"
+	"path"
 	"sort"
 	"strconv"
 
@@ -445,6 +446,10 @@ type RemovedSpawn struct {
 	Instance string
 	stmts    []dst.Stmt
 	indices  []int // original body indices, ascending
+	// imports are the import paths the removed statements reference. A save
+	// while the spawn is deleted prunes imports nothing else uses, so a later
+	// RestoreSpawn must put them back or the restored lines won't compile.
+	imports []string
 }
 
 // RemoveSpawn deletes the instance's spawn statement plus every recognized
@@ -490,6 +495,7 @@ func (s *Scene) RemoveSpawn(instance string) (*RemovedSpawn, error) {
 			rem.indices = append(rem.indices, i)
 		}
 	}
+	rem.imports = importsForStmts(s.file.file, rem.stmts)
 	stmts := make([]dst.Stmt, 0, len(s.fn.Body.List)-len(rem.stmts))
 	for _, stmt := range s.fn.Body.List {
 		if !doomed[stmt] {
@@ -527,8 +533,54 @@ func (s *Scene) RestoreSpawn(rem *RemovedSpawn) error {
 		s.fn.Body.List = append(s.fn.Body.List[:at],
 			append([]dst.Stmt{in.stmt}, s.fn.Body.List[at:]...)...)
 	}
+	// A save while the spawn was deleted may have pruned imports only its
+	// lines used — re-ensure them so the restored statements compile.
+	for _, imp := range rem.imports {
+		ensureImport(s.file.file, imp)
+	}
 	s.rescan()
 	return nil
+}
+
+// importsForStmts maps the package qualifiers mentioned by the statements to
+// their import paths in the file's current import table.
+func importsForStmts(f *dst.File, stmts []dst.Stmt) []string {
+	quals := map[string]bool{}
+	for _, stmt := range stmts {
+		dst.Inspect(stmt, func(n dst.Node) bool {
+			if sel, ok := n.(*dst.SelectorExpr); ok {
+				if id, ok := sel.X.(*dst.Ident); ok {
+					quals[id.Name] = true
+				}
+			}
+			return true
+		})
+	}
+	var out []string
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*dst.GenDecl)
+		if !ok || gd.Tok != token.IMPORT {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			is, ok := spec.(*dst.ImportSpec)
+			if !ok {
+				continue
+			}
+			p, err := strconv.Unquote(is.Path.Value)
+			if err != nil {
+				continue
+			}
+			qual := path.Base(p)
+			if is.Name != nil {
+				qual = is.Name.Name
+			}
+			if quals[qual] {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
 }
 
 // referencesIdent reports whether the statement mentions the identifier.

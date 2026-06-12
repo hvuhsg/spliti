@@ -401,3 +401,32 @@ func Main(c *app.Ctx) {
 		t.Fatal("expected refusal: var referenced by opaque statement")
 	}
 }
+
+// TestRestoreSpawnReEnsuresImports reproduces the delete -> save -> undo
+// corruption: a save while the only components-using spawn is deleted prunes
+// the import, and the undo's RestoreSpawn must put it back — otherwise the
+// editor writes a scene file that references a package it no longer imports.
+func TestRestoreSpawnReEnsuresImports(t *testing.T) {
+	s := parseTestScene(t)
+	// crate1 holds the scene's components.* Set lines in the test scene; once
+	// every other components user is gone, deleting it leaves the components
+	// import unused. The test scene's lamp/weird/quat don't use components.
+	rem, err := s.RemoveSpawn("crate1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the debounced save while deleted: prune runs on every Save.
+	pruneUnusedImports(s.file.file)
+	if src := render(t, s); strings.Contains(src, `"demo/game/components"`) &&
+		strings.Contains(src, "components.") {
+		t.Skip("test scene still uses components elsewhere; pick another fixture")
+	}
+
+	if err := s.RestoreSpawn(rem); err != nil {
+		t.Fatal(err)
+	}
+	src := render(t, s)
+	if strings.Contains(src, "components.") && !strings.Contains(src, `"demo/game/components"`) {
+		t.Fatalf("restored lines reference components but the import is gone:\n%s", src)
+	}
+}
