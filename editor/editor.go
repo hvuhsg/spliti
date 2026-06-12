@@ -107,6 +107,13 @@ type state struct {
 	layerEdit   map[int]string // staged rename buffers, keyed by bit
 	newLayerBuf string
 
+	// input bindings (//spliti:input function; optional)
+	input         *srcmodel.InputFile
+	inputErr      error
+	capture       captureState
+	newActionBuf  string
+	newActionAxis bool
+
 	// play mode (M3): game systems run only while playing; Stop restores the
 	// pre-play snapshot.
 	mode            playMode
@@ -193,6 +200,7 @@ func (p Plugin) Build(a *app.App) {
 		}
 		st.loadSceneSource()
 		st.loadLayers()
+		st.loadInput()
 		st.startWatcher()
 		st.restoreSession(c)
 	})
@@ -303,6 +311,7 @@ func editorUI(c *app.Ctx) {
 	drawAssets(c, st)
 	drawSystems(c, st)
 	drawLayers(c, st)
+	drawInput(c, st)
 	drawConsole(c, st)
 	drawViewport(c, st)
 }

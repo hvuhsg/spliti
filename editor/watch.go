@@ -96,9 +96,10 @@ func drainWatcher(c *app.Ctx) {
 	}
 	select {
 	case <-st.watch.codeEvent:
-		// The layers block lives in game code; re-parse it so the panel and
-		// the Collider3D widget track external (or our own) edits.
+		// The layers block and input table live in game code; re-parse them so
+		// their panels track external (or our own) edits.
 		st.loadLayers()
+		st.loadInput()
 		if !st.rebuildNeeded {
 			st.rebuildNeeded = true
 			st.logf(logWarn, "game code changed on disk - rebuild needed")

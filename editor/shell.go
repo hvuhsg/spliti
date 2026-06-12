@@ -110,6 +110,7 @@ func drawShell(c *app.Ctx, st *state) {
 		imgui.InternalDockBuilderDockWindow("Assets", bottom)
 		imgui.InternalDockBuilderDockWindow("Systems", bottom)
 		imgui.InternalDockBuilderDockWindow("Layers", bottom)
+		imgui.InternalDockBuilderDockWindow("Input", bottom)
 		imgui.InternalDockBuilderDockWindow("Inspector", right)
 		imgui.InternalDockBuilderDockWindow("Console", lower)
 		imgui.InternalDockBuilderDockWindow("Scene", center)

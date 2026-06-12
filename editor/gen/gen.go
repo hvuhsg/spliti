@@ -46,6 +46,7 @@ type Project struct {
 	Scenes     []string // //spliti:scene names in the configured scene file
 	Components []string // exported struct names in game/components
 	Prefabs    []string // //spliti:entity function names in game/entities
+	InputFunc  string   // //spliti:input function name in game/, "" when none
 
 	// Engine module wiring, read from the game's go.mod, for the generated
 	// target's own go.mod (see Generate).
@@ -100,7 +101,39 @@ func Load(root string) (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
+	p.InputFunc = directiveFunc(filepath.Join(abs, "game"), "spliti:input")
 	return p, nil
+}
+
+// directiveFunc returns the name of the first exported function in dir's
+// package carrying the given //directive, or "".
+func directiveFunc(dir, directive string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			continue
+		}
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || !fn.Name.IsExported() || fn.Recv != nil || fn.Doc == nil {
+				continue
+			}
+			for _, cm := range fn.Doc.List {
+				if strings.TrimSpace(strings.TrimPrefix(cm.Text, "//")) == directive {
+					return fn.Name.Name
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // Generate writes .spliti/editor/{go.mod,main.go,registry_gen.go}.
@@ -289,6 +322,9 @@ import (
 
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/editor"
+{{- if .InputFunc}}
+	"github.com/hvuhsg/spliti/plugin/inputs/actions"
+{{- end}}
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
@@ -313,6 +349,9 @@ func main() {
 			VSync:   true,
 		},
 		ui.Plugin{},
+{{- if .InputFunc}}
+		actions.Plugin{Map: game.{{.InputFunc}}()},
+{{- end}}
 		editor.Plugin{
 			ProjectRoot: {{printf "%q" .Root}},
 			SceneFile:   "{{.Config.Scene.File}}",
