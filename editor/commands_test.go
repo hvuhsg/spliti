@@ -8,6 +8,8 @@ import (
 
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/editor/registry"
+	"github.com/hvuhsg/spliti/editor/srcmodel"
+	"github.com/hvuhsg/spliti/plugin/collision"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	"github.com/hvuhsg/spliti/scene"
@@ -363,5 +365,39 @@ func TestReloadSyncsStructure(t *testing.T) {
 	tm := generic.NewMap[render3d.Transform3D](c.World())
 	if tm.Get(e).Translation.X != 7 {
 		t.Fatalf("spawned transform wrong: %+v", tm.Get(e))
+	}
+}
+
+func TestCmdSetComponentSymbolicLayers(t *testing.T) {
+	c, st := newCmdEditor(t)
+	e, _ := entityByInstance(c, "crate1")
+	ti := st.reg.Lookup("Collider3D")
+	ti.Add(c.World(), e)
+
+	// Install the named-layer table the way loadLayers does.
+	st.symLayers = &srcmodel.Layers{
+		Pkg:        "game",
+		ImportPath: "testgame/game",
+		Names:      []string{"LayerDefault", "LayerPlayer"},
+	}
+	st.scene().SetLayers(st.symLayers)
+
+	want := collision.Collider3D{Half: m.Vec3{X: 1}, Layer: 1 << 1, Mask: 0b11}
+	st.push(c, st.newSetComponent("crate1", e, ti, collision.Collider3D{}, want))
+	src := modelSrc(t, st)
+	if !strings.Contains(src, "Layer: game.LayerPlayer, Mask: game.LayerDefault | game.LayerPlayer") {
+		t.Fatalf("layer bits not symbolic:\n%s", src)
+	}
+	if !strings.Contains(src, `"testgame/game"`) {
+		t.Fatalf("game import missing:\n%s", src)
+	}
+
+	// Decode path: zero the live value, sync from the model, get it back.
+	ti.SetValue(c.World(), e, collision.Collider3D{})
+	if err := syncInstanceFromModel(c, st, st.scene().Spawn("crate1")); err != nil {
+		t.Fatal(err)
+	}
+	if got := ti.Value(c.World(), e).(collision.Collider3D); got != want {
+		t.Fatalf("decoded %+v, want %+v", got, want)
 	}
 }

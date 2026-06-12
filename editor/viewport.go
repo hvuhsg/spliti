@@ -32,7 +32,11 @@ func drawViewport(c *app.Ctx, st *state) {
 		imgui.End()
 		return
 	}
-	cam := app.GetResource[render3d.Camera3D](c)
+	cam := st.edCam
+	if cam == nil {
+		imgui.End()
+		return
+	}
 
 	// Create / resize the offscreen target; the ImGui texture id stays stable
 	// across resizes via ui.UpdateTexture.
@@ -108,7 +112,10 @@ func drawSelectionGizmo(c *app.Ctx, st *state, rectMin, rectSize m.Vec2) {
 	if !tMap.Has(prim) || !gtMap.Has(prim) {
 		return
 	}
-	cam := app.GetResource[render3d.Camera3D](c)
+	cam := st.edCam
+	if cam == nil {
+		return
+	}
 	model := gtMap.Get(prim).Matrix
 	prevModel := model
 

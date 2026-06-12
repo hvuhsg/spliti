@@ -39,9 +39,10 @@ var entityRefType = reflect.TypeFor[ecs.Entity]()
 const ecsImportPath = "github.com/mlange-42/arche/ecs"
 
 // encCtx carries encoding state: which live entities resolve to which spawn
-// variable names.
+// variable names, and the symbolic-layer table when the scene has one.
 type encCtx struct {
 	entityVar map[ecs.Entity]string
+	layers    *Layers
 }
 
 // SetComponentValue encodes v (a struct) into a composite literal of the given
@@ -57,7 +58,7 @@ func (s *Scene) SetComponentValue(instance, typeName string, v reflect.Value) er
 // is promoted to bind a variable when needed, and the scene.Set line is placed
 // (or moved) after every spawn it references so the file still compiles.
 func (s *Scene) SetComponentValueRefs(instance, typeName string, v reflect.Value, refs EntityResolver) error {
-	ctx := &encCtx{entityVar: map[ecs.Entity]string{}}
+	ctx := &encCtx{entityVar: map[ecs.Entity]string{}, layers: s.layers}
 	var refInstances []string
 	for _, e := range entityRefs(v) {
 		if _, done := ctx.entityVar[e]; done {
@@ -139,7 +140,7 @@ func litForValue(typeName string, v reflect.Value, ctx *encCtx) (*dst.CompositeL
 		if !f.IsExported() || fv.IsZero() {
 			continue
 		}
-		expr, imps, err := valueExpr(fv, ctx)
+		expr, imps, err := fieldExpr(f, fv, ctx)
 		if err != nil {
 			return nil, nil, fmt.Errorf("srcmodel: %s.%s: %w", typeName, f.Name, err)
 		}
@@ -148,6 +149,21 @@ func litForValue(typeName string, v reflect.Value, ctx *encCtx) (*dst.CompositeL
 		lit.Elts = append(lit.Elts, kv)
 	}
 	return lit, imports, nil
+}
+
+// fieldExpr encodes one struct field value, honoring the `spliti` layer tags:
+// with a symbolic-layer table installed, a tagged unsigned field is written as
+// the game's named layer constants when its bits have names.
+func fieldExpr(f reflect.StructField, v reflect.Value, ctx *encCtx) (dst.Expr, []string, error) {
+	if tag := layerFieldTag(f.Tag.Get("spliti")); tag != "" && ctx != nil && ctx.layers != nil {
+		switch v.Kind() {
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			if expr, ok := ctx.layers.symbolicExpr(v.Uint(), tag == "layer"); ok {
+				return expr, []string{ctx.layers.ImportPath}, nil
+			}
+		}
+	}
+	return valueExpr(v, ctx)
 }
 
 // valueExpr encodes one field value.
@@ -289,6 +305,13 @@ func ApplyLit(lit *dst.CompositeLit, v reflect.Value) error {
 // ApplyLitRefs is ApplyLit with entity-reference support: identifier values in
 // entity-typed fields are resolved to live entities through look.
 func ApplyLitRefs(lit *dst.CompositeLit, v reflect.Value, look VarLookup) error {
+	return ApplyLitLayers(lit, v, look, nil)
+}
+
+// ApplyLitLayers is ApplyLitRefs with symbolic-layer support: named layer
+// constants (and `|` chains of them) in unsigned fields resolve through the
+// layers table.
+func ApplyLitLayers(lit *dst.CompositeLit, v reflect.Value, look VarLookup, layers *Layers) error {
 	if v.Kind() != reflect.Struct || !v.CanSet() {
 		return fmt.Errorf("srcmodel: ApplyLit target must be a settable struct")
 	}
@@ -306,14 +329,14 @@ func ApplyLitRefs(lit *dst.CompositeLit, v reflect.Value, look VarLookup) error 
 		if !fv.IsValid() || !fv.CanSet() {
 			return fmt.Errorf("srcmodel: unknown field %q in literal", key.Name)
 		}
-		if err := applyExpr(kv.Value, fv, look); err != nil {
+		if err := applyExpr(kv.Value, fv, look, layers); err != nil {
 			return fmt.Errorf("srcmodel: field %s: %w", key.Name, err)
 		}
 	}
 	return nil
 }
 
-func applyExpr(e dst.Expr, v reflect.Value, look VarLookup) error {
+func applyExpr(e dst.Expr, v reflect.Value, look VarLookup, layers *Layers) error {
 	if v.Type() == entityRefType {
 		switch ex := e.(type) {
 		case *dst.Ident:
@@ -346,11 +369,17 @@ func applyExpr(e dst.Expr, v reflect.Value, look VarLookup) error {
 		}
 		v.SetInt(int64(f))
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		f, ok := floatLit(e)
-		if !ok || f < 0 {
-			return fmt.Errorf("expected unsigned numeric literal")
+		if f, ok := floatLit(e); ok && f >= 0 {
+			v.SetUint(uint64(f))
+			return nil
 		}
-		v.SetUint(uint64(f))
+		// Named layer constants (`game.LayerPlayer`, `a | b`) when a symbolic
+		// table is installed.
+		if n, ok := layers.resolveExpr(e); ok {
+			v.SetUint(n)
+			return nil
+		}
+		return fmt.Errorf("expected unsigned numeric literal")
 	case reflect.Float32, reflect.Float64:
 		f, ok := floatLit(e)
 		if !ok {
@@ -368,7 +397,7 @@ func applyExpr(e dst.Expr, v reflect.Value, look VarLookup) error {
 		if !ok {
 			return fmt.Errorf("expected composite literal")
 		}
-		return ApplyLitRefs(lit, v, look)
+		return ApplyLitLayers(lit, v, look, layers)
 	case reflect.Slice:
 		lit, ok := e.(*dst.CompositeLit)
 		if !ok {
@@ -376,7 +405,7 @@ func applyExpr(e dst.Expr, v reflect.Value, look VarLookup) error {
 		}
 		s := reflect.MakeSlice(v.Type(), len(lit.Elts), len(lit.Elts))
 		for i, elt := range lit.Elts {
-			if err := applyExpr(elt, s.Index(i), look); err != nil {
+			if err := applyExpr(elt, s.Index(i), look, layers); err != nil {
 				return fmt.Errorf("element %d: %w", i, err)
 			}
 		}
@@ -391,7 +420,7 @@ func applyExpr(e dst.Expr, v reflect.Value, look VarLookup) error {
 		}
 		v.SetZero()
 		for i, elt := range lit.Elts {
-			if err := applyExpr(elt, v.Index(i), look); err != nil {
+			if err := applyExpr(elt, v.Index(i), look, layers); err != nil {
 				return fmt.Errorf("element %d: %w", i, err)
 			}
 		}
@@ -405,26 +434,27 @@ func applyExpr(e dst.Expr, v reflect.Value, look VarLookup) error {
 // the editor can decode and rewrite — the precondition for the editor to own
 // the scene.Set line. Struct literals are keyed; slice/array literals are
 // positional. Identifiers naming spawn variables (vars) are entity references
-// and count as editable.
-func compositeEditable(lit *dst.CompositeLit, vars map[string]bool) bool {
+// and count as editable, as do named layer constants resolvable through the
+// scene's layers table (nil disables them).
+func compositeEditable(lit *dst.CompositeLit, vars map[string]bool, layers *Layers) bool {
 	for _, elt := range lit.Elts {
 		if kv, ok := elt.(*dst.KeyValueExpr); ok {
 			if _, ok := kv.Key.(*dst.Ident); !ok {
 				return false
 			}
-			if !literalExpr(kv.Value, vars) {
+			if !literalExpr(kv.Value, vars, layers) {
 				return false
 			}
 			continue
 		}
-		if !literalExpr(elt, vars) {
+		if !literalExpr(elt, vars, layers) {
 			return false
 		}
 	}
 	return true
 }
 
-func literalExpr(e dst.Expr, vars map[string]bool) bool {
+func literalExpr(e dst.Expr, vars map[string]bool, layers *Layers) bool {
 	switch v := e.(type) {
 	case *dst.BasicLit:
 		return true
@@ -436,6 +466,9 @@ func literalExpr(e dst.Expr, vars map[string]bool) bool {
 		}
 		_, ok := v.X.(*dst.BasicLit)
 		return ok
+	case *dst.SelectorExpr, *dst.BinaryExpr:
+		_, ok := layers.resolveExpr(e)
+		return ok
 	case *dst.CompositeLit:
 		// Acceptable literal types: a named type, a slice/array type, or none
 		// (elided element type inside a slice literal).
@@ -444,7 +477,7 @@ func literalExpr(e dst.Expr, vars map[string]bool) bool {
 				return false
 			}
 		}
-		return compositeEditable(v, vars)
+		return compositeEditable(v, vars, layers)
 	}
 	return false
 }

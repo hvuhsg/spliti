@@ -80,11 +80,12 @@ The parser is conservative: anything it doesn't recognize (loops, conditionals, 
 ## Panels and controls
 
 - **Scene (viewport)** — the offscreen-rendered 3D view. Click to pick (lights draw clickable star icons), ctrl/cmd-click for multi-select, drag the gizmo to transform — with several entities selected the whole group follows one drag as one undo step. Camera: right-drag orbits, middle-drag pans, scroll dollies, holding RMB gives WASD fly (Q/E vertical, Shift for 3× speed), `F` frames the selection.
+- **Game** — the world as the *game's own camera* sees it: a second scene pass with no grid, gizmos, or icons, docked as a tab next to Scene. The editor's navigation never touches the game camera — scene setup poses it, and during Play your camera systems drive it live. Display-only; hidden tabs skip the extra GPU pass.
 - **Hierarchy** — the scene's named instances as a tree (built from `render3d.Parent` links). Click selects (ctrl/cmd-click toggles multi-selection), drag reparents; context menu renames, duplicates, deletes, unparents — delete and duplicate act on the whole selection.
 - **Inspector** — the selected entity's components, editable field-by-field: numbers, vectors, quaternions (as Euler degrees), nested structs, slices (with add/remove), and entity-reference fields (a combo of named instances, written to source as the referenced spawn's variable). Edits apply live while you drag and commit one undo step (and one source rewrite) when you release. "Add component" lists every registered type. `Collider3D` gets a layer combo and a mask checklist when the project declares named layers.
 - **Assets** — the project's prefabs. Drag one into the viewport to spawn it where the drop ray lands (a new `scene.Spawn` line); double-click spawns at the origin.
 - **Systems** — your game systems grouped by stage, each with an enable toggle. Toggles gate execution during Play and are session-only — they're never written to source.
-- **Layers** — the game's named collision layers, backed by the `//spliti:layers` const block in `game/layers.go`. Rename or append in place (removal would silently renumber compiled bits, so it's not offered).
+- **Layers** — the game's named collision layers, backed by the `//spliti:layers` const block in `game/layers.go`. Rename or append in place (removal would silently renumber compiled bits, so it's not offered). Collider layer bits are written to scene source as the named constants — `Layer: game.LayerPlayer, Mask: game.LayerDefault | game.LayerEnemy` — and hand-written symbolic colliders parse back as editable.
 - **Input** — the game's action bindings, backed by the `//spliti:input` function in `game/input.go`. Actions and axes list their sources as removable chips; "+ bind" opens a press-any-input capture (keys and gamepads live, mouse via buttons, two presses for a negative/positive button axis). Every edit rewrites the source *and* rebinds the live `actions.Map`, so Play picks it up without a rebuild.
 - **Console** — editor status, game log output, and rebuild output. Build errors with `file:line` locations are clickable and open in your editor.
 
@@ -117,5 +118,5 @@ When the watcher flags a code change (or you add a new component/prefab the regi
 
 - The editor edits **scenes**, not arbitrary game code — systems, prefab internals, and asset loading are written in your IDE (the watcher + rebuild flow is designed around that).
 - Scenes are 3D (`render3d`) only; there's no 2D/terminal scene editing.
-- Resources aren't snapshotted in Play mode, and entity references inside game components don't survive a Stop restore.
-- No multi-select, no prefab *editing* in the GUI (prefabs are Go functions), no animation timeline.
+- Resources aren't snapshotted in Play mode (the game camera is the one exception — Stop restores it).
+- No prefab *editing* in the GUI (prefabs are Go functions), no animation timeline, no asset thumbnails.

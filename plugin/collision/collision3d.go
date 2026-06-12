@@ -15,8 +15,11 @@ const DefaultCellSize3D float32 = 4
 // position, extending Half in each axis (so the full box spans 2·Half). Layer
 // and Mask filter collisions exactly as on the 2D Collider.
 type Collider3D struct {
-	Half        m.Vec3
-	Layer, Mask uint32
+	Half m.Vec3
+	// Tagged for the editor like the 2D Collider: scene source uses the
+	// game's named layer constants for these bit fields.
+	Layer uint32 `spliti:"layer"`
+	Mask  uint32 `spliti:"layers"`
 }
 
 // Collision3DEvent is sent once per overlapping pair per tick, with A and B in

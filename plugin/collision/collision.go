@@ -41,8 +41,12 @@ const DefaultCellSize = 16
 // other. The zero value (Layer 0, Mask 0) means "default layer, collide with
 // everything", so a plain Collider{W,H} behaves like an unfiltered box.
 type Collider struct {
-	W, H        int
-	Layer, Mask uint32
+	W, H int
+	// The `spliti` tags mark these for the editor: a "layer" field holds one
+	// named layer bit, a "layers" field a mask of them, and scene source
+	// written by the editor uses the game's named layer constants.
+	Layer uint32 `spliti:"layer"`
+	Mask  uint32 `spliti:"layers"`
 }
 
 // CollisionEvent is sent once per overlapping pair per tick. A and B are the

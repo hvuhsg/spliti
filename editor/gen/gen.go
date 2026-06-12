@@ -361,6 +361,7 @@ func main() {
 			GameSystems: game.RegisterSystems,
 			Registry:    buildRegistry(),
 			Prefabs:     buildPrefabs(),
+			GamePkg:     "{{.Module}}/game",
 		},
 	)
 	a.Run()

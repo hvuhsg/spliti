@@ -61,6 +61,10 @@ type Plugin struct {
 	// so the editor can spawn instances live (Assets panel, undo of delete,
 	// watcher-discovered spawn lines).
 	Prefabs map[string]PrefabFunc
+	// GamePkg is the import path of the game's root package (the one holding
+	// the //spliti:layers block). When set and named layers exist, scene.Set
+	// lines write layer bits as named constants (game.LayerPlayer). Optional.
+	GamePkg string
 }
 
 // state is the editor's central resource.
@@ -73,6 +77,21 @@ type state struct {
 	texID     imgui.TextureID
 	dockBuilt bool
 	vpHovered bool
+
+	// edCam is the editor's own camera, driving the Scene viewport via
+	// render3d.SetSceneCamera. The global Camera3D resource stays the game's:
+	// scene setup poses it, game systems drive it during Play, and the Game
+	// panel renders from it.
+	edCam *render3d.Camera3D
+
+	// game view: a second scene pass (no editor gizmo lines) from the game's
+	// camera into its own target, shown in the Game panel.
+	gameRT    *render3d.RenderTarget
+	gameView  *render3d.SceneView
+	gameTexID imgui.TextureID
+	// gameCamBefore restores the game camera on Stop (resources are not part
+	// of the world snapshot, but the camera is engine-owned and cheap to keep).
+	gameCamBefore render3d.Camera3D
 
 	// selection: ordered, last entry is the primary (inspector/gizmo anchor)
 	sel []ecs.Entity
@@ -106,6 +125,10 @@ type state struct {
 	layersErr   error
 	layerEdit   map[int]string // staged rename buffers, keyed by bit
 	newLayerBuf string
+	// symLayers is the symbolic-layer table installed on the scene model
+	// (named layer constants in scene.Set lines); nil when the project has no
+	// named layers or no GamePkg.
+	symLayers *srcmodel.Layers
 
 	// input bindings (//spliti:input function; optional)
 	input         *srcmodel.InputFile
@@ -199,6 +222,13 @@ func (p Plugin) Build(a *app.App) {
 		if p.SetupScene != nil {
 			p.SetupScene(c)
 		}
+		// The editor renders through its own camera from here on; the global
+		// Camera3D resource is left to the game (seeded from its startup pose).
+		if gc := app.GetResource[render3d.Camera3D](c); gc != nil {
+			ec := *gc
+			st.edCam = &ec
+			render3d.SetSceneCamera(c, st.edCam)
+		}
 		st.loadSceneSource()
 		st.loadLayers()
 		st.loadInput()
@@ -216,7 +246,7 @@ func (p Plugin) Build(a *app.App) {
 	})
 
 	render3d.AddPreRender(a, func(c *app.Ctx) {
-		st.cam.apply(c)
+		st.cam.apply(st.edCam)
 		drawGrid(c)
 		drawSelectionBox(c, st)
 		drawLightIcons(c, st)
@@ -254,7 +284,7 @@ func (st *state) installLayoutPersistence(io *imgui.IO) {
 
 // layoutVersion identifies the default dock layout; bump it when adding or
 // removing a docked panel so stale user layouts are rebuilt once.
-const layoutVersion = "3"
+const layoutVersion = "4"
 
 // installSmokeHooks wires the headless-verification env hooks (used by CI and
 // scripted runs; inert otherwise): SPLITI_EDITOR_FRAMES bounds the run,
@@ -287,6 +317,12 @@ func installSmokeHooks(a *app.App, st *state) {
 			if play {
 				st.startPlay(c)
 			}
+		case 80:
+			// Bring the Game tab forward so the frame-90 shot captures the
+			// second scene pass (the game camera's view) mid-play.
+			if play {
+				imgui.SetWindowFocusStr("Game")
+			}
 		case 100:
 			if os.Getenv("SPLITI_EDITOR_REBUILD") == "1" {
 				os.Unsetenv("SPLITI_EDITOR_REBUILD")
@@ -295,6 +331,10 @@ func installSmokeHooks(a *app.App, st *state) {
 		case 150:
 			if play {
 				st.stopPlay(c)
+			}
+		case 160:
+			if play {
+				imgui.SetWindowFocusStr("Scene")
 			}
 		case 90, 180:
 			screenshot.Save(c, fmt.Sprintf("%s.%d.png", shot, c.App().Frame()))
@@ -316,6 +356,7 @@ func editorUI(c *app.Ctx) {
 	drawInput(c, st)
 	drawConsole(c, st)
 	drawViewport(c, st)
+	drawGameView(c, st)
 }
 
 func (st *state) handleShortcuts(c *app.Ctx) {

@@ -131,8 +131,8 @@ func buildPipeline(g *GPU) {
 		panic("render3d: transparent pipeline: " + err.Error())
 	}
 
-	g.instanceCap = initialInstanceCap
-	g.instanceBuf = newInstanceBuffer(g, g.instanceCap)
+	g.draw.instanceCap = initialInstanceCap
+	g.draw.instanceBuf = newInstanceBuffer(g, g.draw.instanceCap)
 
 	g.frameBuf, err = g.device.CreateBuffer(&wgpu.BufferDescriptor{
 		Label: "spliti.render3d.frame",
@@ -408,22 +408,9 @@ func disableMSAA(g *GPU) {
 	ensureDepthTarget(g)
 }
 
-// ensureInstanceCap grows the instance buffer to hold at least n model matrices.
-func ensureInstanceCap(g *GPU, n int) {
-	if n <= g.instanceCap {
-		return
-	}
-	newCap := g.instanceCap * 2
-	for newCap < n {
-		newCap *= 2
-	}
-	g.instanceBuf.Release()
-	g.instanceBuf = newInstanceBuffer(g, newCap)
-	g.instanceCap = newCap
-}
-
 // ensurePointCap grows the point-light storage buffer to hold at least n lights,
-// rebuilding the frame bind group (which references the buffer) when it grows.
+// rebuilding the frame bind group and every SceneView's bind group (all of which
+// reference the buffer) when it grows.
 func ensurePointCap(g *GPU, n int) {
 	if n <= g.pointCap {
 		return
@@ -437,4 +424,8 @@ func ensurePointCap(g *GPU, n int) {
 	g.pointCap = newCap
 	g.frameBindGroup.Release()
 	g.frameBindGroup = newFrameBindGroup(g)
+	for _, v := range g.views {
+		v.bindGroup.Release()
+		v.bindGroup = newViewBindGroup(g, v)
+	}
 }

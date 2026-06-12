@@ -29,6 +29,7 @@ import (
 // entries hold a bit position without naming it.
 type LayersFile struct {
 	Path  string
+	Pkg   string   // the file's package name, the qualifier scene source uses
 	Names []string // index = bit position; "" for blank entries
 
 	file        *dst.File
@@ -86,7 +87,7 @@ func parseLayersSource(src []byte, path string) (*LayersFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	lf := &LayersFile{Path: path, file: f}
+	lf := &LayersFile{Path: path, Pkg: f.Name.Name, file: f}
 	for _, decl := range f.Decls {
 		gd, ok := decl.(*dst.GenDecl)
 		if !ok || gd.Tok != token.CONST || !hasDirective(gd.Decs.Start.All(), layersDirective) {

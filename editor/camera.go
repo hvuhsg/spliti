@@ -24,9 +24,8 @@ func defaultRig() cameraRig {
 	return cameraRig{dist: 10, yaw: 0.6, pitch: 0.5}
 }
 
-// apply writes the rig into the render3d camera each frame (pre-render).
-func (r *cameraRig) apply(c *app.Ctx) {
-	cam := app.GetResource[render3d.Camera3D](c)
+// apply writes the rig into the editor's camera each frame (pre-render).
+func (r *cameraRig) apply(cam *render3d.Camera3D) {
 	if cam == nil {
 		return
 	}

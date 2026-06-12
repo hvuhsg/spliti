@@ -114,6 +114,7 @@ func drawShell(c *app.Ctx, st *state) {
 		imgui.InternalDockBuilderDockWindow("Inspector", right)
 		imgui.InternalDockBuilderDockWindow("Console", lower)
 		imgui.InternalDockBuilderDockWindow("Scene", center)
+		imgui.InternalDockBuilderDockWindow("Game", center)
 		imgui.InternalDockBuilderFinish(dockID)
 	}
 	// cimgui-go v1.5.0: DockSpaceV dereferences the WindowClass
