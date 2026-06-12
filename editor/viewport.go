@@ -69,39 +69,48 @@ func drawViewport(c *app.Ctx, st *state) {
 
 	// Click picking — viewport-local pixels against the RT extents. Skipped
 	// while the cursor is on a gizmo handle so grabs never re-pick.
+	// Ctrl/cmd-click toggles set membership for multi-selection.
 	if st.vpHovered && imgui.IsMouseClickedBool(imgui.MouseButtonLeft) && !st.gz.Over() {
+		io := imgui.CurrentIO()
+		multi := io.KeyCtrl() || io.KeySuper()
 		mp := imgui.MousePos()
 		origin, dir := cam.ScreenToRay(float64(mp.X-imageMin.X), float64(mp.Y-imageMin.Y), w, h)
-		if hit, ok := render3d.Raycast(c, origin, dir); ok {
-			st.selected, st.hasSelected = hit.Entity, true
-		} else {
-			st.hasSelected = false
+		picked, ok := pickEntity(c, origin, dir)
+		switch {
+		case ok && multi:
+			st.toggleSelect(picked)
+		case ok:
+			st.selectOne(picked)
+		case !multi:
+			st.clearSelection()
 		}
 	}
 
-	if st.hasSelected {
+	if len(st.sel) > 0 {
 		drawSelectionGizmo(c, st, vec2(imageMin), vec2(avail))
 	}
 
 	imgui.End()
 }
 
-// drawSelectionGizmo runs the transform gizmo on the selected entity, writes
-// the result into its (parent-relative) Transform3D, and schedules a source
-// writeback when the drag ends.
+// drawSelectionGizmo runs the transform gizmo anchored on the primary
+// selection. The primary follows the gizmo directly; every other selected
+// entity follows through the drag's world-space delta matrix. One batched
+// undo command covers the whole drag.
 func drawSelectionGizmo(c *app.Ctx, st *state, rectMin, rectSize m.Vec2) {
 	world := c.World()
-	if !world.Alive(st.selected) {
-		st.hasSelected = false
+	prim, ok := st.primary()
+	if !ok {
 		return
 	}
 	tMap := generic.NewMap[render3d.Transform3D](world)
 	gtMap := generic.NewMap[render3d.GlobalTransform](world)
-	if !tMap.Has(st.selected) || !gtMap.Has(st.selected) {
+	if !tMap.Has(prim) || !gtMap.Has(prim) {
 		return
 	}
 	cam := app.GetResource[render3d.Camera3D](c)
-	model := gtMap.Get(st.selected).Matrix
+	model := gtMap.Get(prim).Matrix
+	prevModel := model
 
 	var snap float32
 	if imgui.CurrentIO().KeyCtrl() {
@@ -126,26 +135,89 @@ func drawSelectionGizmo(c *app.Ctx, st *state, rectMin, rectSize m.Vec2) {
 		MouseDown: render3d.MouseButtonDown(c, inputs.MouseButtonLeft),
 		Snap:      snap,
 	}
-	if st.gz.Manipulate(imgui.WindowDrawList(), f, st.op, gizmo.World, &model) {
-		t := tMap.Get(st.selected)
-		t.Translation, t.Rotation, t.Scale = decomposeTRS(localize(c, st.selected, model))
+	changed := st.gz.Manipulate(imgui.WindowDrawList(), f, st.op, gizmo.World, &model)
+	if st.gz.Started() {
+		// Capture every selected entity's pre-drag local transform for undo.
+		clear(st.dragStart)
+		for _, e := range st.sel {
+			if tMap.Has(e) {
+				st.dragStart[e] = *tMap.Get(e)
+			}
+		}
+	}
+	if changed {
+		t := tMap.Get(prim)
+		t.Translation, t.Rotation, t.Scale = decomposeTRS(localize(c, prim, model))
 		// Keep the world matrix coherent within this frame (the renderer's
 		// propagateTransforms recomputes it next frame anyway).
-		gtMap.Get(st.selected).Matrix = model
+		gtMap.Get(prim).Matrix = model
+		// The rest of the selection follows by this frame's world-space delta.
+		if inv, ok := prevModel.Inverse(); ok {
+			delta := model.Mul(inv)
+			for _, e := range st.sel {
+				if e == prim || !tMap.Has(e) || !gtMap.Has(e) || followsSelected(c, st, e) {
+					continue
+				}
+				ng := delta.Mul(gtMap.Get(e).Matrix)
+				et := tMap.Get(e)
+				et.Translation, et.Rotation, et.Scale = decomposeTRS(localize(c, e, ng))
+				gtMap.Get(e).Matrix = ng
+			}
+		}
 	}
 	if st.gz.Finished() {
-		// One undo command per drag: before from the world matrix captured at
-		// drag start, after is the live local transform the drag produced.
-		var before render3d.Transform3D
-		before.Translation, before.Rotation, before.Scale =
-			decomposeTRS(localize(c, st.selected, st.gz.StartModel()))
-		st.push(c, &cmdTransform{
-			instance: instanceName(c, st.selected),
-			entity:   st.selected,
-			before:   before,
-			after:    *tMap.Get(st.selected),
-		})
+		var cmds []editorCmd
+		for _, e := range st.sel {
+			before, ok := st.dragStart[e]
+			if !ok || !tMap.Has(e) {
+				continue
+			}
+			after := *tMap.Get(e)
+			if before == after {
+				continue
+			}
+			cmds = append(cmds, &cmdTransform{
+				instance: instanceName(c, e),
+				entity:   e,
+				before:   before,
+				after:    after,
+			})
+		}
+		clear(st.dragStart)
+		if len(cmds) > 0 {
+			st.push(c, batch("transform", cmds))
+		}
 	}
+}
+
+// followsSelected reports whether e already inherits the drag through a
+// selected ancestor — applying the delta again would double-move it.
+func followsSelected(c *app.Ctx, st *state, e ecs.Entity) bool {
+	for _, other := range st.sel {
+		if other != e && isDescendant(c, e, other) {
+			return true
+		}
+	}
+	return false
+}
+
+// pickEntity resolves a pick ray to the nearest entity: mesh raycast and
+// light-icon spheres compete by distance, so meshless lights are selectable.
+func pickEntity(c *app.Ctx, origin, dir m.Vec3) (ecs.Entity, bool) {
+	hit, hitOK := render3d.Raycast(c, origin, dir)
+	light, lightT, lightOK := pickLight(c, origin, dir)
+	switch {
+	case hitOK && lightOK:
+		if lightT < hit.Dist {
+			return light, true
+		}
+		return hit.Entity, true
+	case hitOK:
+		return hit.Entity, true
+	case lightOK:
+		return light, true
+	}
+	return ecs.Entity{}, false
 }
 
 // localize re-expresses a world matrix in the entity's parent space (parents
@@ -185,7 +257,7 @@ func (st *state) spawnPrefab(c *app.Ctx, prefab string, at m.Vec3) {
 	cmd := &cmdSpawn{instance: name, prefab: prefab, t: render3d.XForm().At(at.X, at.Y, at.Z)}
 	st.push(c, cmd)
 	if e, ok := entityByInstance(c, name); ok {
-		st.selected, st.hasSelected = e, true
+		st.selectOne(e)
 	}
 }
 

@@ -1,15 +1,16 @@
 package editor
 
 import (
+	"reflect"
+
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/editor/registry"
-	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/mlange-42/arche/ecs"
 )
 
 // worldSnapshot is a deep copy of every live entity, taken when Play starts
-// and restored when it stops. Components are captured through the registry
-// (plain-struct values, so a copy is a deep copy); a component type that is
+// and restored when it stops. Components are captured through the registry's
+// Value (a deep copy); a component type that is
 // not registered is invisible here and will not survive the round trip — the
 // registry covers the engine built-ins and every exported struct in the
 // game's components package, so in practice that means exotic hand-registered
@@ -53,9 +54,9 @@ func takeSnapshot(c *app.Ctx, reg *registry.Registry) *worldSnapshot {
 }
 
 // restore despawns every live entity (snapshotted and play-created alike) and
-// rebuilds the snapshot. Entity handles change; render3d.Parent links are
-// remapped through the old->new table. Entity references inside game
-// components are not remapped (v1 limitation).
+// rebuilds the snapshot. Entity handles change; every entity reference inside
+// every registered component — render3d.Parent links and game-component fields
+// alike — is remapped through the old->new table.
 func (s *worldSnapshot) restore(c *app.Ctx) {
 	w := c.World()
 	var doomed []ecs.Entity
@@ -77,12 +78,46 @@ func (s *worldSnapshot) restore(c *app.Ctx) {
 		e := remap[es.id]
 		for _, cs := range es.comps {
 			val := cs.val
-			if p, ok := val.(render3d.Parent); ok {
-				if ne, ok := remap[p.Entity]; ok {
-					val = render3d.Parent{Entity: ne}
-				}
+			rv := reflect.New(reflect.TypeOf(val)).Elem()
+			rv.Set(reflect.ValueOf(val))
+			if remapEntityRefs(rv, remap) {
+				val = rv.Interface()
 			}
 			cs.ti.SetValue(w, e, val)
 		}
 	}
+}
+
+var entityHandleType = reflect.TypeFor[ecs.Entity]()
+
+// remapEntityRefs rewrites every entity handle reachable in v through the
+// old->new table, reporting whether anything changed. Handles absent from the
+// table (references to entities that did not exist when the snapshot was
+// taken) are left as-is.
+func remapEntityRefs(v reflect.Value, remap map[ecs.Entity]ecs.Entity) bool {
+	if v.Type() == entityHandleType {
+		old := v.Interface().(ecs.Entity)
+		if ne, ok := remap[old]; ok && ne != old && v.CanSet() {
+			v.Set(reflect.ValueOf(ne))
+			return true
+		}
+		return false
+	}
+	changed := false
+	switch v.Kind() {
+	case reflect.Struct:
+		t := v.Type()
+		for i := 0; i < v.NumField(); i++ {
+			if t.Field(i).IsExported() && remapEntityRefs(v.Field(i), remap) {
+				changed = true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			if remapEntityRefs(v.Index(i), remap) {
+				changed = true
+			}
+		}
+	}
+	return changed
 }

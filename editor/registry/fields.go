@@ -12,7 +12,7 @@ import (
 type FieldKind int
 
 const (
-	KindOpaque FieldKind = iota // recognized type but not editable in M1
+	KindOpaque FieldKind = iota // recognized type but not editable
 	KindFloat32
 	KindFloat64
 	KindInt // any signed/unsigned integer kind
@@ -23,6 +23,7 @@ const (
 	KindVec4
 	KindQuat
 	KindEntity
+	KindSlice // slice of leaf-kind or struct elements
 )
 
 // Field is one inspectable field of a component, possibly nested one struct
@@ -76,45 +77,61 @@ func leafKind(t reflect.Type) FieldKind {
 	return KindOpaque
 }
 
+// KindOf classifies t as a leaf editor kind (KindOpaque when t needs structural
+// treatment — struct recursion or a slice widget — or is not editable at all).
+func KindOf(t reflect.Type) FieldKind { return leafKind(t) }
+
+// FieldsOf returns the inspector fields of an arbitrary struct type. The
+// inspector uses it to render slice elements, which are not part of any
+// registered component's precomputed field list.
+func FieldsOf(t reflect.Type) []Field { return walkFields(t) }
+
+// SliceEditable reports whether a slice of elem can be edited element-wise:
+// leaf kinds get their leaf widget, structs get a nested field group.
+func SliceEditable(elem reflect.Type) bool {
+	return leafKind(elem) != KindOpaque || elem.Kind() == reflect.Struct
+}
+
+// maxFieldDepth bounds struct recursion in walkFields; anything nested deeper
+// shows up as a single opaque entry.
+const maxFieldDepth = 3
+
 // walkFields flattens t's exported fields into inspector entries. Known math
-// types are leaves; other structs are flattened one level with dotted names;
-// anything deeper or unrecognized becomes a single opaque entry so the
-// inspector can at least show that it exists.
+// types are leaves; other structs are flattened recursively with dotted names
+// (up to maxFieldDepth); slices of expressible elements become KindSlice;
+// anything unrecognized becomes an opaque entry so the inspector can at least
+// show that it exists.
 func walkFields(t reflect.Type) []Field {
 	if t.Kind() != reflect.Struct {
 		return nil
 	}
-	var out []Field
+	return appendFields(nil, t, "", nil, 0)
+}
+
+func appendFields(out []Field, t reflect.Type, prefix string, index []int, depth int) []Field {
 	for i := 0; i < t.NumField(); i++ {
 		sf := t.Field(i)
 		if !sf.IsExported() {
 			continue
 		}
+		name := prefix + sf.Name
+		idx := append(append([]int{}, index...), i)
 		if k := leafKind(sf.Type); k != KindOpaque {
-			out = append(out, Field{Name: sf.Name, Kind: k, Index: []int{i}})
+			out = append(out, Field{Name: name, Kind: k, Index: idx})
 			continue
 		}
-		if sf.Type.Kind() == reflect.Struct {
-			flat := false
-			for j := 0; j < sf.Type.NumField(); j++ {
-				nf := sf.Type.Field(j)
-				if !nf.IsExported() {
-					continue
-				}
-				if k := leafKind(nf.Type); k != KindOpaque {
-					out = append(out, Field{
-						Name:  sf.Name + "." + nf.Name,
-						Kind:  k,
-						Index: []int{i, j},
-					})
-					flat = true
-				}
+		switch {
+		case sf.Type.Kind() == reflect.Slice && SliceEditable(sf.Type.Elem()):
+			out = append(out, Field{Name: name, Kind: KindSlice, Index: idx})
+		case sf.Type.Kind() == reflect.Struct && depth < maxFieldDepth:
+			n := len(out)
+			out = appendFields(out, sf.Type, name+".", idx, depth+1)
+			if len(out) == n { // nothing inspectable inside: keep it visible
+				out = append(out, Field{Name: name, Kind: KindOpaque, Index: idx})
 			}
-			if flat {
-				continue
-			}
+		default:
+			out = append(out, Field{Name: name, Kind: KindOpaque, Index: idx})
 		}
-		out = append(out, Field{Name: sf.Name, Kind: KindOpaque, Index: []int{i}})
 	}
 	return out
 }

@@ -164,7 +164,25 @@ Bundle of `time + terminal + input + tui` in the right order. Use this for anyth
 
 ### `network` — `plugin/network`
 
-Opt-in. See [docs/network.md](docs/network.md).
+Opt-in. See [docs/network.md](network.md).
+
+### The rest of the catalog, in one line each
+
+Everything below is opt-in and composes against the same seams:
+
+| Plugin | What it adds |
+|---|---|
+| `plugin/sprite` | Multi-cell ASCII-art sprite rendering on the terminal. |
+| `plugin/canvas` | Truecolor half-block RGB pixel framebuffer for image-like terminal output. |
+| `plugin/webgpu` | 2D GPU window: textured-sprite rendering via WebGPU + GLFW (native cgo or browser wasm). See [docs/gpu.md](gpu.md). |
+| `plugin/render3d` | 3D GPU window: perspective camera, PBR meshes, lights, instancing, picking, overlay panels. Documented in the package comments. |
+| `plugin/audio` | Software mixer over oto/v3: SFX, streamed music, buses, 2D/3D spatial audio. See [docs/audio.md](audio.md). |
+| `plugin/inputs` | The backend-agnostic input vocabulary (key/mouse/gamepad events) every render backend publishes into; `inputs/actions` maps them to named, rebindable actions with `Held`/`JustPressed`/`Axis`. |
+| `plugin/gamepad` | Controller polling, native (GLFW) and browser (Gamepad API), feeding `inputs.Gamepads`. |
+| `plugin/text` | CPU text rasterization (embedded Go fonts or any TTF/OTF) for upload to the GPU backends. |
+| `plugin/ui` | Dear ImGui (cimgui-go) over a custom wgpu backend on render3d — dev tooling and editor UI. |
+| `plugin/collision` | Cgo-free broad-phase collision: spatial-hash grid, 2D and 3D, layers/masks. |
+| `plugin/screenshot` | Saves the rendered frame to an image file. |
 
 ## Anti-patterns
 

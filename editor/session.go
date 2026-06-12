@@ -12,9 +12,12 @@ import (
 // quitting): the camera pose and the selection. It lives next to the ImGui
 // layout under .spliti/.
 type sessionData struct {
-	Scene    string  `json:"scene"`
-	Selected string  `json:"selected,omitempty"`
-	Camera   sessCam `json:"camera"`
+	Scene string `json:"scene"`
+	// Selected is the legacy single-selection field; Selection supersedes it
+	// (ordered, last entry is the primary).
+	Selected  string   `json:"selected,omitempty"`
+	Selection []string `json:"selection,omitempty"`
+	Camera    sessCam  `json:"camera"`
 }
 
 type sessCam struct {
@@ -40,8 +43,13 @@ func (st *state) saveSession(c *app.Ctx) {
 			Pitch: st.cam.pitch,
 		},
 	}
-	if st.hasSelected {
-		s.Selected = instanceName(c, st.selected)
+	for _, e := range st.sel {
+		if n := instanceName(c, e); n != "" {
+			s.Selection = append(s.Selection, n)
+		}
+	}
+	if len(s.Selection) > 0 {
+		s.Selected = s.Selection[len(s.Selection)-1]
 	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
@@ -67,9 +75,13 @@ func (st *state) restoreSession(c *app.Ctx) {
 		st.cam.dist = s.Camera.Dist
 		st.cam.yaw, st.cam.pitch = s.Camera.Yaw, s.Camera.Pitch
 	}
-	if s.Selected != "" {
-		if e, ok := entityByInstance(c, s.Selected); ok {
-			st.selected, st.hasSelected = e, true
+	sel := s.Selection
+	if len(sel) == 0 && s.Selected != "" {
+		sel = []string{s.Selected}
+	}
+	for _, name := range sel {
+		if e, ok := entityByInstance(c, name); ok && !st.isSelected(e) {
+			st.sel = append(st.sel, e)
 		}
 	}
 }

@@ -4,10 +4,15 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/render3d"
+	"github.com/hvuhsg/spliti/scene"
 	"github.com/hvuhsg/spliti/schedule"
+	"github.com/mlange-42/arche/ecs"
+	"github.com/mlange-42/arche/generic"
 )
 
 // Play mode runs the game's own systems inside the editor. Entering Play
@@ -115,18 +120,61 @@ func (st *state) stopPlay(c *app.Ctx) {
 	if st.mode == modeEdit || st.snapshot == nil {
 		return
 	}
-	selected := instanceName(c, st.selected) // survives the despawn by name
+	// The selection survives the despawn by instance name.
+	var selected []string
+	for _, e := range st.sel {
+		if n := instanceName(c, e); n != "" {
+			selected = append(selected, n)
+		}
+	}
+	// With "keep transforms" on, capture where play moved the named instances
+	// before the snapshot puts them back.
+	var playT map[string]render3d.Transform3D
+	tm := generic.NewMap[render3d.Transform3D](c.World())
+	if st.keepPlayTransforms {
+		playT = map[string]render3d.Transform3D{}
+		app.Query1[scene.Name](c, func(e ecs.Entity, n *scene.Name) {
+			if tm.Has(e) {
+				playT[n.Value] = *tm.Get(e)
+			}
+		})
+	}
 	st.snapshot.restore(c)
 	st.snapshot = nil
 	st.mode = modeEdit
 	st.stepPending, st.stepActive = false, false
-	st.hasSelected = false
-	if selected != "" {
-		if e, ok := entityByInstance(c, selected); ok {
-			st.selected, st.hasSelected = e, true
+	st.clearSelection()
+	for _, name := range selected {
+		if e, ok := entityByInstance(c, name); ok {
+			st.sel = append(st.sel, e)
 		}
 	}
 	st.logf(logInfo, "play stopped: world restored")
+	// Re-apply the captured play transforms as one undoable edit (mode is Edit
+	// again, so this writes the scene source like any other transform edit).
+	if len(playT) > 0 {
+		names := make([]string, 0, len(playT))
+		for name := range playT {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		var cmds []editorCmd
+		for _, name := range names {
+			e, ok := entityByInstance(c, name)
+			if !ok || !tm.Has(e) {
+				continue
+			}
+			before := *tm.Get(e)
+			if before == playT[name] {
+				continue
+			}
+			cmds = append(cmds, &cmdTransform{instance: name, entity: e, before: before, after: playT[name]})
+		}
+		if len(cmds) > 0 {
+			st.push(c, batch("keep play transforms", cmds))
+			st.logf(logInfo, "kept play transforms on %d instance(s)", len(cmds))
+		}
+	}
 	if st.reloadAfterPlay {
 		st.reloadAfterPlay = false
 		reloadScene(c, st)

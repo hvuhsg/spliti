@@ -22,8 +22,12 @@ type fancy struct {
 	Inner  struct {
 		Speed float32
 		Name  string
+		Deep  struct{ On bool }
 	}
-	Blob map[string]int // no editor kind: opaque
+	Weights []float32      // slice of leaves: KindSlice
+	Friends []ecs.Entity   // slice of entity refs: KindSlice
+	Grid    [][]float32    // nested slice: opaque
+	Blob    map[string]int // no editor kind: opaque
 }
 
 func TestRegisterAndWorldAccess(t *testing.T) {
@@ -58,11 +62,15 @@ func TestFieldWalk(t *testing.T) {
 	fields := r.Lookup("Fancy").Fields
 
 	want := map[string]FieldKind{
-		"Pos":         KindVec3,
-		"Target":      KindEntity,
-		"Inner.Speed": KindFloat32,
-		"Inner.Name":  KindString,
-		"Blob":        KindOpaque,
+		"Pos":           KindVec3,
+		"Target":        KindEntity,
+		"Inner.Speed":   KindFloat32,
+		"Inner.Name":    KindString,
+		"Inner.Deep.On": KindBool,
+		"Weights":       KindSlice,
+		"Friends":       KindSlice,
+		"Grid":          KindOpaque,
+		"Blob":          KindOpaque,
 	}
 	if len(fields) != len(want) {
 		t.Fatalf("fields = %+v", fields)

@@ -21,13 +21,55 @@ import (
 // (parse error) the source half is skipped — edits stay live-only, as the
 // status line warns.
 
-// push executes a command through the undo stack and surfaces failures in the
-// status line.
-func (st *state) push(c *app.Ctx, cmd interface {
+// editorCmd is the undoable-mutation interface every command here implements.
+type editorCmd interface {
 	Name() string
 	Do(c *app.Ctx) error
 	Undo(c *app.Ctx) error
-}) {
+}
+
+// cmdBatch groups commands into one undo step (multi-selection operations).
+type cmdBatch struct {
+	name string
+	cmds []editorCmd
+}
+
+// batch wraps cmds into a single undo step; a singleton batch collapses to
+// the command itself.
+func batch(name string, cmds []editorCmd) editorCmd {
+	if len(cmds) == 1 {
+		return cmds[0]
+	}
+	return &cmdBatch{name: fmt.Sprintf("%s %d entities", name, len(cmds)), cmds: cmds}
+}
+
+func (cmd *cmdBatch) Name() string { return cmd.name }
+
+func (cmd *cmdBatch) Do(c *app.Ctx) error {
+	for i, sub := range cmd.cmds {
+		if err := sub.Do(c); err != nil {
+			for j := i - 1; j >= 0; j-- {
+				cmd.cmds[j].Undo(c)
+			}
+			return fmt.Errorf("%s: %w", sub.Name(), err)
+		}
+	}
+	return nil
+}
+
+func (cmd *cmdBatch) Undo(c *app.Ctx) error {
+	var firstErr error
+	for i := len(cmd.cmds) - 1; i >= 0; i-- {
+		if err := cmd.cmds[i].Undo(c); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("%s: %w", cmd.cmds[i].Name(), err)
+		}
+	}
+	return firstErr
+}
+
+// push executes a command through the undo stack and surfaces failures in the
+// status line.
+func (st *state) push(c *app.Ctx, cmd editorCmd) {
 	// In Play mode edits are live-only and ephemeral (Stop restores the
 	// snapshot), so they bypass the undo stack — an entry would be stale the
 	// moment the world reverts.
@@ -55,6 +97,32 @@ func (st *state) scene() *srcmodel.Scene {
 
 // qualName is the component type as written in scene source ("components.Health").
 func qualName(ti *registry.TypeInfo) string { return ti.Pkg + "." + ti.Name }
+
+// entityResolver maps live entity handles to instance names so entity-ref
+// fields encode as spawn variables in scene source.
+func entityResolver(c *app.Ctx) srcmodel.EntityResolver {
+	return func(e ecs.Entity) (string, bool) {
+		n := instanceName(c, e)
+		return n, n != ""
+	}
+}
+
+// varLookup resolves spawn variable names back to live entities when scene.Set
+// literals holding entity references are decoded.
+func (st *state) varLookup(c *app.Ctx) srcmodel.VarLookup {
+	return func(varName string) (ecs.Entity, bool) {
+		sc := st.scene()
+		if sc == nil {
+			return ecs.Entity{}, false
+		}
+		for _, sp := range sc.Spawns {
+			if sp.Var == varName {
+				return entityByInstance(c, sp.Instance)
+			}
+		}
+		return ecs.Entity{}, false
+	}
+}
 
 // resolve finds the live entity for a command target: by instance name when
 // the target is named (handles survive despawn/respawn cycles), by the stored
@@ -144,7 +212,7 @@ func (cmd *cmdSetComponent) apply(c *app.Ctx, val any, wantLine bool) error {
 		return nil
 	}
 	if wantLine {
-		if err := sc.SetComponentValue(cmd.instance, qualName(ti), reflect.ValueOf(val)); err != nil {
+		if err := sc.SetComponentValueRefs(cmd.instance, qualName(ti), reflect.ValueOf(val), entityResolver(c)); err != nil {
 			st.status(fmt.Sprintf("live-only: %v", err))
 		}
 	} else {
@@ -201,7 +269,7 @@ func (cmd *cmdAddComponent) Do(c *app.Ctx) error {
 			sc.DeleteRemove(cmd.instance, qualName(ti))
 		}
 		zero := reflect.New(ti.Type).Elem()
-		if err := sc.SetComponentValue(cmd.instance, qualName(ti), zero); err != nil {
+		if err := sc.SetComponentValueRefs(cmd.instance, qualName(ti), zero, entityResolver(c)); err != nil {
 			st.status(fmt.Sprintf("live-only: %v", err))
 		}
 	}
@@ -270,7 +338,7 @@ func (cmd *cmdRemoveComponent) Undo(c *app.Ctx) error {
 	if sc := st.scene(); sc != nil && cmd.instance != "" {
 		sc.DeleteRemove(cmd.instance, qualName(ti))
 		if cmd.hadSetLine {
-			sc.SetComponentValue(cmd.instance, qualName(ti), reflect.ValueOf(cmd.before))
+			sc.SetComponentValueRefs(cmd.instance, qualName(ti), reflect.ValueOf(cmd.before), entityResolver(c))
 		}
 	}
 	return nil
@@ -569,7 +637,7 @@ func syncInstanceFromModel(c *app.Ctx, st *state, sp *srcmodel.Spawn) error {
 			continue
 		}
 		v := reflect.New(ti.Type).Elem()
-		if err := srcmodel.ApplyLit(sl.Lit(), v); err != nil {
+		if err := srcmodel.ApplyLitRefs(sl.Lit(), v, st.varLookup(c)); err != nil {
 			st.status(fmt.Sprintf("%s: %v", sp.Instance, err))
 			continue
 		}
@@ -685,11 +753,4 @@ func depthUnder(c *app.Ctx, e, root ecs.Entity) (int, bool) {
 func isDescendant(c *app.Ctx, e, root ecs.Entity) bool {
 	_, ok := depthUnder(c, e, root)
 	return ok
-}
-
-// deselectIf clears the selection when it points at (a descendant of) e.
-func (st *state) deselectIf(e ecs.Entity) {
-	if st.hasSelected && st.selected == e {
-		st.hasSelected = false
-	}
 }

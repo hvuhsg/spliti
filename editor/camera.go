@@ -122,16 +122,17 @@ func (r *cameraRig) forward() m.Vec3 {
 	return eyeOffset.Scale(-1).Normalize()
 }
 
-// focusSelection re-pivots onto the selected entity and pulls in close.
+// focusSelection re-pivots onto the primary selection and pulls in close.
 func (r *cameraRig) focusSelection(c *app.Ctx, st *state) {
-	if !st.hasSelected || !c.World().Alive(st.selected) {
+	prim, ok := st.primary()
+	if !ok || !c.World().Alive(prim) {
 		return
 	}
 	gt := generic.NewMap[render3d.GlobalTransform](c.World())
-	if !gt.Has(st.selected) {
+	if !gt.Has(prim) {
 		return
 	}
-	mat := gt.Get(st.selected).Matrix
+	mat := gt.Get(prim).Matrix
 	r.pivot = m.Vec3{X: mat[12], Y: mat[13], Z: mat[14]}
 	if r.dist > 12 {
 		r.dist = 12

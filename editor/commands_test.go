@@ -9,6 +9,7 @@ import (
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/editor/registry"
 	"github.com/hvuhsg/spliti/plugin/render3d"
+	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	"github.com/hvuhsg/spliti/scene"
 	"github.com/mlange-42/arche/ecs"
 	"github.com/mlange-42/arche/generic"
@@ -16,6 +17,13 @@ import (
 
 // Health mirrors a game component for command tests.
 type Health struct{ Max, Current int }
+
+// Seeker carries an entity reference and a slice, exercising the M4 encode
+// paths and the snapshot entity remap.
+type Seeker struct {
+	Target    ecs.Entity
+	Waypoints []m.Vec3
+}
 
 const cmdScene = `package scenes
 
@@ -50,6 +58,7 @@ func newCmdEditor(t *testing.T) (*app.Ctx, *state) {
 	reg := registry.New()
 	registry.Builtin(reg)
 	registry.Register[Health](reg, "Health", "components")
+	registry.Register[Seeker](reg, "Seeker", "components")
 
 	prefab := func(c *app.Ctx, tr render3d.Transform3D) ecs.Entity {
 		mp := generic.NewMap2[render3d.Transform3D, render3d.GlobalTransform](c.World())
@@ -111,6 +120,47 @@ func TestCmdTransformUndoRedo(t *testing.T) {
 	st.redo(c)
 	if got := tm.Get(e).Translation.X; got != 3 {
 		t.Fatalf("redo: X = %v", got)
+	}
+}
+
+// TestCmdSetComponentEntityRefAndSlice pushes a component holding an entity
+// reference and a slice: the override line must encode the reference as the
+// target's spawn variable, and syncInstanceFromModel must decode it back to
+// the live handle.
+func TestCmdSetComponentEntityRefAndSlice(t *testing.T) {
+	c, st := newCmdEditor(t)
+	lamp, _ := entityByInstance(c, "lamp")
+	crate1, _ := entityByInstance(c, "crate1")
+	ti := st.reg.Lookup("Seeker")
+	ti.Add(c.World(), lamp)
+
+	want := Seeker{Target: crate1, Waypoints: []m.Vec3{{X: 1}, {Y: 2}}}
+	st.push(c, st.newSetComponent("lamp", lamp, ti, Seeker{}, want))
+	src := modelSrc(t, st)
+	if !strings.Contains(src, "scene.Set(c, lamp, components.Seeker{Target: crate1, Waypoints: []m.Vec3{{X: 1}, {Y: 2}}})") {
+		t.Fatalf("entity-ref override line wrong:\n%s", src)
+	}
+	if !strings.Contains(src, `"github.com/hvuhsg/spliti/plugin/render3d/m"`) {
+		t.Fatalf("m import missing:\n%s", src)
+	}
+
+	// Decode path: zero the live value, then sync the instance from the model.
+	ti.SetValue(c.World(), lamp, Seeker{})
+	sp := st.scene().Spawn("lamp")
+	if err := syncInstanceFromModel(c, st, sp); err != nil {
+		t.Fatal(err)
+	}
+	got := ti.Value(c.World(), lamp).(Seeker)
+	if got.Target != crate1 {
+		t.Fatalf("decoded Target = %v, want %v", got.Target, crate1)
+	}
+	if len(got.Waypoints) != 2 || got.Waypoints[1].Y != 2 {
+		t.Fatalf("decoded Waypoints = %+v", got.Waypoints)
+	}
+
+	st.undoLast(c)
+	if strings.Contains(modelSrc(t, st), "components.Seeker{") {
+		t.Fatalf("undo left the Set line:\n%s", modelSrc(t, st))
 	}
 }
 

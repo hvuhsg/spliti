@@ -61,12 +61,17 @@ func drawHierarchy(c *app.Ctx, st *state) {
 		if len(nd.children) == 0 {
 			flags |= imgui.TreeNodeFlagsLeaf
 		}
-		if st.hasSelected && st.selected == nd.e {
+		if st.isSelected(nd.e) {
 			flags |= imgui.TreeNodeFlagsSelected
 		}
 		open := imgui.TreeNodeExStrV(fmt.Sprintf("%s##%v", nd.name, nd.e), flags)
 		if imgui.IsItemClicked() && !imgui.IsItemToggledOpen() {
-			st.selected, st.hasSelected = nd.e, true
+			io := imgui.CurrentIO()
+			if io.KeyCtrl() || io.KeySuper() {
+				st.toggleSelect(nd.e)
+			} else {
+				st.selectOne(nd.e)
+			}
 		}
 
 		if imgui.BeginDragDropSource() {
@@ -122,7 +127,11 @@ func hierarchyContextMenu(c *app.Ctx, st *state, name string, e ecs.Entity) {
 	if !imgui.BeginPopupContextItem() {
 		return
 	}
-	st.selected, st.hasSelected = e, true
+	// Right-clicking inside the current multi-selection keeps it (so Delete/
+	// Duplicate act on the whole set); outside, the row becomes the selection.
+	if !st.isSelected(e) {
+		st.selectOne(e)
+	}
 	if imgui.MenuItemBool("Rename...") {
 		st.renameTarget, st.renameBuf = name, name
 	}
@@ -137,7 +146,7 @@ func hierarchyContextMenu(c *app.Ctx, st *state, name string, e ecs.Entity) {
 	}
 	imgui.Separator()
 	if imgui.MenuItemBool("Delete") {
-		st.push(c, &cmdDelete{root: name})
+		st.deleteSelection(c)
 	}
 	imgui.EndPopup()
 }
