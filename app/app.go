@@ -40,6 +40,10 @@ type App struct {
 	preUpdateHook  func()
 	postUpdateHook func()
 
+	// systemInterceptor, when set, rewrites every system registered through
+	// AddSystems before it is stored. See SetSystemInterceptor.
+	systemInterceptor func(schedule.Stage, *SystemConfig) *SystemConfig
+
 	onExitHooks []func()
 }
 
@@ -66,33 +70,46 @@ func (a *App) AddSystems(stage schedule.Stage, items ...any) *App {
 		st = &stageSystems{}
 		a.stages[stage] = st
 	}
+	add := func(cfg *SystemConfig) {
+		if a.systemInterceptor != nil {
+			cfg = a.systemInterceptor(stage, cfg)
+			if cfg == nil {
+				return
+			}
+		}
+		st.add(systemEntry{
+			fn:     cfg.Fn,
+			label:  cfg.label,
+			runIf:  cfg.runIf,
+			before: cfg.before,
+			after:  cfg.after,
+		})
+	}
 	for _, item := range items {
 		switch v := item.(type) {
 		case SystemFunc:
-			st.add(systemEntry{fn: v})
+			add(&SystemConfig{Fn: v})
 		case *SystemConfig:
-			st.add(systemEntry{
-				fn:     v.Fn,
-				label:  v.label,
-				runIf:  v.runIf,
-				before: v.before,
-				after:  v.after,
-			})
+			add(v)
 		case []*SystemConfig:
 			for _, c := range v {
-				st.add(systemEntry{
-					fn:     c.Fn,
-					label:  c.label,
-					runIf:  c.runIf,
-					before: c.before,
-					after:  c.after,
-				})
+				add(c)
 			}
 		default:
 			panic(fmt.Sprintf("AddSystems: unsupported argument type %T", v))
 		}
 	}
 	return a
+}
+
+// SetSystemInterceptor installs a hook that sees every system registered via
+// AddSystems (from plugins and user code alike) before it is stored. The hook
+// may return the config unchanged, return a modified config (e.g. with an
+// extra RunIf gate), or return nil to drop the system. The editor uses it to
+// gate game systems behind Play mode. Install before AddPlugins/AddSystems;
+// systems registered earlier are unaffected.
+func (a *App) SetSystemInterceptor(fn func(schedule.Stage, *SystemConfig) *SystemConfig) {
+	a.systemInterceptor = fn
 }
 
 // AddPlugins invokes each plugin's Build method against this App.

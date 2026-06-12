@@ -29,6 +29,42 @@ func NewTransform3D(pos m.Vec3) Transform3D {
 	}
 }
 
+// XForm returns the identity transform (origin, no rotation, unit scale) for
+// chaining: render3d.XForm().At(1, 0, -2).EulerDeg(0, 45, 0).Scaled(2, 2, 2).
+//
+// The chain forms are the editor's canonical transform grammar — scene files
+// written by the spliti editor express every spawn transform this way, and the
+// editor parses them back. Keep arguments literal in scene setup functions so
+// they stay machine-editable.
+func XForm() Transform3D { return NewTransform3D(m.Vec3{}) }
+
+// At returns a copy of t translated to (x, y, z).
+func (t Transform3D) At(x, y, z float32) Transform3D {
+	t.Translation = m.Vec3{X: x, Y: y, Z: z}
+	return t
+}
+
+// EulerDeg returns a copy of t rotated by intrinsic Tait-Bryan angles in
+// degrees, applied in Y (yaw=y), X (pitch=x), Z (roll=z) order — the inverse of
+// m.Quat.ToEuler.
+func (t Transform3D) EulerDeg(x, y, z float32) Transform3D {
+	t.Rotation = m.FromEuler(m.DegToRad(x), m.DegToRad(y), m.DegToRad(z))
+	return t
+}
+
+// Scaled returns a copy of t with per-axis scale (x, y, z).
+func (t Transform3D) Scaled(x, y, z float32) Transform3D {
+	t.Scale = m.Vec3{X: x, Y: y, Z: z}
+	return t
+}
+
+// Rot returns a copy of t with an explicit quaternion rotation — the lossless
+// fallback for rotations that don't survive a round trip through Euler angles.
+func (t Transform3D) Rot(x, y, z, w float32) Transform3D {
+	t.Rotation = m.Quat{X: x, Y: y, Z: z, W: w}.Normalize()
+	return t
+}
+
 // matrix builds the local TRS matrix, defending against zero-valued rotation
 // and scale so a partially-initialized Transform3D still renders sensibly.
 func (t Transform3D) matrix() m.Mat4 {

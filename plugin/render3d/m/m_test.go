@@ -209,3 +209,32 @@ func TestSlerpEndpoints(t *testing.T) {
 func quatApprox(a, b Quat) bool {
 	return approx(a.X, b.X) && approx(a.Y, b.Y) && approx(a.Z, b.Z) && approx(a.W, b.W)
 }
+
+func TestToEulerRoundTrip(t *testing.T) {
+	cases := [][3]float32{
+		{0, 0, 0},
+		{0.3, 0, 0}, {0, 0.7, 0}, {0, 0, -1.1},
+		{0.4, -0.9, 0.2}, {-1.2, 2.8, -2.9}, {1.0, -3.0, 3.0},
+	}
+	for _, c := range cases {
+		q := FromEuler(c[0], c[1], c[2])
+		p, y, r := q.ToEuler()
+		q2 := FromEuler(p, y, r)
+		if !quatApprox(q, q2) {
+			t.Errorf("euler %v: round trip %v -> (%v,%v,%v) -> %v", c, q, p, y, r, q2)
+		}
+	}
+}
+
+func TestToEulerGimbalLock(t *testing.T) {
+	for _, pitch := range []float32{math.Pi / 2, -math.Pi / 2} {
+		q := FromEuler(pitch, 0.8, -0.4)
+		p, y, r := q.ToEuler()
+		if r != 0 {
+			t.Errorf("pitch %v: roll not pinned to 0 at gimbal lock: %v", pitch, r)
+		}
+		if !quatApprox(FromEuler(p, y, r), q) {
+			t.Errorf("pitch %v: gimbal-lock extraction does not round trip", pitch)
+		}
+	}
+}

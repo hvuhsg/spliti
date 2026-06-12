@@ -1,8 +1,0 @@
-ref = "paddle"
-w = 1
-h = 4
-rows = ["█", "█", "█", "█"]
-
-[style]
-fg = "white"
-bold = true

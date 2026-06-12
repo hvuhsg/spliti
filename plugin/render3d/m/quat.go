@@ -37,6 +37,30 @@ func FromEuler(pitch, yaw, roll float32) Quat {
 	}.Normalize()
 }
 
+// ToEuler extracts the intrinsic Tait-Bryan angles (radians, Y-X-Z order) that
+// FromEuler would compose back into this rotation. Near gimbal lock
+// (|pitch| → 90°) yaw and roll are not unique; roll is forced to 0 and yaw
+// absorbs the remaining rotation, which still round-trips through FromEuler.
+func (a Quat) ToEuler() (pitch, yaw, roll float32) {
+	r := a.Normalize().ToMat3()
+	// R = Ry(yaw)·Rx(pitch)·Rz(roll); element (row,col) at col*3+row.
+	sp := -r[7] // -R[1][2] = sin(pitch)
+	// |cos(pitch)| from row 1 = (cp·sr, cp·cr, -sp); atan2 stays
+	// well-conditioned where asin(sp) would not be (sp near ±1).
+	cp := math.Hypot(float64(r[1]), float64(r[4]))
+	pitch = float32(math.Atan2(float64(sp), cp))
+	if cp < 1e-4 {
+		// cos(pitch) ≈ 0: yaw and roll rotate around the same world axis, so
+		// only yaw∓roll is observable. With roll pinned to 0,
+		// R[0] = [cos(yaw∓roll), ±sin(yaw∓roll), 0].
+		yaw = float32(math.Atan2(float64(sp*r[3]), float64(r[0]))) // sp·R[0][1], R[0][0]
+		return pitch, yaw, 0
+	}
+	yaw = float32(math.Atan2(float64(r[6]), float64(r[8])))  // R[0][2], R[2][2]
+	roll = float32(math.Atan2(float64(r[1]), float64(r[4]))) // R[1][0], R[1][1]
+	return pitch, yaw, roll
+}
+
 // Mul returns the composed rotation a then b applied as (a*b), i.e. applying the
 // result rotates a vector by b first, then a (standard quaternion convention).
 func (a Quat) Mul(b Quat) Quat {
