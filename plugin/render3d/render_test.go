@@ -212,3 +212,42 @@ func TestNormalizeSamples(t *testing.T) {
 		}
 	}
 }
+
+// --- SceneView frame UBO ---
+
+func TestViewFrameUBOReplacesCameraHeadOnly(t *testing.T) {
+	var base [frameUBOFloats]float32
+	for i := range base {
+		base[i] = float32(1000 + i) // sentinel per slot
+	}
+	var view, proj m.Mat4
+	for i := range view {
+		view[i] = float32(i)
+		proj[i] = float32(100 + i)
+	}
+	pos := m.Vec3{X: 7, Y: 8, Z: 9}
+
+	out := viewFrameUBO(base, view, proj, pos)
+
+	for i := 0; i < 16; i++ {
+		if out[i] != view[i] {
+			t.Fatalf("out[%d] = %v, want view %v", i, out[i], view[i])
+		}
+		if out[16+i] != proj[i] {
+			t.Fatalf("out[%d] = %v, want proj %v", 16+i, out[16+i], proj[i])
+		}
+	}
+	if out[32] != 7 || out[33] != 8 || out[34] != 9 || out[35] != 1 {
+		t.Fatalf("cameraPos slot = %v", out[32:36])
+	}
+	// Everything from ambient on (lights, point count) must pass through.
+	for i := 36; i < frameUBOFloats; i++ {
+		if out[i] != base[i] {
+			t.Fatalf("out[%d] = %v, want passthrough %v", i, out[i], base[i])
+		}
+	}
+	// And the input must not be mutated.
+	if base[0] != 1000 {
+		t.Fatal("viewFrameUBO mutated its input")
+	}
+}

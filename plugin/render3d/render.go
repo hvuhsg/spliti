@@ -74,8 +74,11 @@ func installSystems(a *app.App) {
 // positions are current.
 func writeFrameUniforms(c *app.Ctx) {
 	g := app.GetResource[GPU](c)
-	cam := app.GetResource[Camera3D](c)
-	if g == nil || cam == nil {
+	if g == nil {
+		return
+	}
+	cam := g.sceneCam(c)
+	if cam == nil {
 		return
 	}
 
@@ -191,6 +194,12 @@ func renderSystem(c *app.Ctx) {
 		return
 	}
 
+	// Extra scene passes (SceneView) record first, into the same encoder, so
+	// their targets are finished before any pass that might sample them.
+	for _, v := range g.views {
+		v.record(c, g, encoder)
+	}
+
 	pass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
 		ColorAttachments:       []wgpu.RenderPassColorAttachment{color},
 		DepthStencilAttachment: &depth,
@@ -202,7 +211,7 @@ func renderSystem(c *app.Ctx) {
 	pass.SetPipeline(g.pipeline)
 	pass.SetBindGroup(0, g.frameBindGroup, nil)
 
-	drawMeshes(c, g, pass)
+	drawMeshes(c, g, pass, g.sceneCam(c), &g.draw)
 }
 
 // endScenePass is a no-op without a scene target. With one, it closes the
@@ -270,15 +279,15 @@ func endScenePass(c *app.Ctx) {
 // MaterialRef / InstanceColor / Transparent), draws opaque ones grouped by
 // mesh+material into instanced batches, then draws Transparent ones back-to-front
 // with the blended pipeline. All instance records (model matrix + tint) are
-// uploaded once into the shared instance buffer: opaque batches first, then the
-// sorted transparent instances.
-func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
+// uploaded once into the pass's instance buffer: opaque batches first, then the
+// sorted transparent instances. cam drives culling and the transparent sort; d
+// is the pass's own buffer set (main pass or a SceneView).
+func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder, cam *Camera3D, d *drawState) {
 	meshes := app.GetResource[MeshRegistry](c)
 	materials := app.GetResource[MaterialRegistry](c)
 	if meshes == nil || materials == nil {
 		return
 	}
-	cam := app.GetResource[Camera3D](c)
 	world := c.World()
 	matRefMap := generic.NewMap[MaterialRef](world)
 	colorMap := generic.NewMap[InstanceColor](world)
@@ -288,11 +297,11 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 	// uses, then cull each entity by its world-space bounding sphere below.
 	cull := cam != nil
 	if cull {
-		g.viewFrustum = extractFrustum(cam.Projection().Mul(cam.View()))
+		d.frustum = extractFrustum(cam.Projection().Mul(cam.View()))
 	}
 
-	g.items = g.items[:0]
-	g.tItems = g.tItems[:0]
+	d.items = d.items[:0]
+	d.tItems = d.tItems[:0]
 	app.Query2[MeshRenderer, GlobalTransform](c, func(e ecs.Entity, mr *MeshRenderer, gt *GlobalTransform) {
 		gm := meshes.get(mr.Mesh)
 		if gm == nil {
@@ -300,7 +309,7 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 		}
 		if cull {
 			center := transformPoint(gt.Matrix, gm.boundsCenter)
-			if !g.viewFrustum.sphereInside(center, gm.boundsRadius*maxAxisScale(gt.Matrix)) {
+			if !d.frustum.sphereInside(center, gm.boundsRadius*maxAxisScale(gt.Matrix)) {
 				return // outside the view frustum: skip
 			}
 		}
@@ -315,40 +324,40 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 		it := renderItem{mesh: mr.Mesh, material: mat, model: gt.Matrix, color: col}
 		if transparentMap.Has(e) {
 			it.depth = cameraDepthSq(cam, gt.Matrix)
-			g.tItems = append(g.tItems, it)
+			d.tItems = append(d.tItems, it)
 		} else {
-			g.items = append(g.items, it)
+			d.items = append(d.items, it)
 		}
 	})
 
-	g.scratch = g.scratch[:0]
-	g.batches = g.batches[:0]
+	d.scratch = d.scratch[:0]
+	d.batches = d.batches[:0]
 
 	// Opaque: batch by (mesh, material); depth buffer handles ordering.
 	opaqueCount := 0
-	if len(g.items) > 0 {
-		g.scratch, g.batches = packMeshInstances(g.items, g.scratch, g.batches)
-		opaqueCount = len(g.scratch)
+	if len(d.items) > 0 {
+		d.scratch, d.batches = packMeshInstances(d.items, d.scratch, d.batches)
+		opaqueCount = len(d.scratch)
 	}
 
 	// Transparent: sort back-to-front (far first) so blending composites correctly
 	// without depth writes; a sorted set can't be instance-batched, so each draws
 	// as a single instance appended after the opaque records.
-	sort.SliceStable(g.tItems, func(i, j int) bool { return g.tItems[i].depth > g.tItems[j].depth })
-	for _, it := range g.tItems {
-		g.scratch = append(g.scratch, instanceData{model: it.model, color: it.color})
+	sort.SliceStable(d.tItems, func(i, j int) bool { return d.tItems[i].depth > d.tItems[j].depth })
+	for _, it := range d.tItems {
+		d.scratch = append(d.scratch, instanceData{model: it.model, color: it.color})
 	}
 
-	if len(g.scratch) == 0 {
+	if len(d.scratch) == 0 {
 		return
 	}
-	ensureInstanceCap(g, len(g.scratch))
-	if err := g.queue.WriteBuffer(g.instanceBuf, 0, wgpu.ToBytes(g.scratch)); err != nil {
+	d.ensureCap(g, len(d.scratch))
+	if err := g.queue.WriteBuffer(d.instanceBuf, 0, wgpu.ToBytes(d.scratch)); err != nil {
 		return
 	}
 
-	// Opaque draws use the pipeline + frame bind group already bound by renderSystem.
-	for _, b := range g.batches {
+	// Opaque draws use the pipeline + frame bind group already bound by the caller.
+	for _, b := range d.batches {
 		gm := meshes.get(b.mesh)
 		if gm == nil {
 			continue
@@ -361,16 +370,16 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 		// The instance buffer binding is already offset to this batch's start, so
 		// firstInstance is 0 (not b.start) — otherwise the base instance would be
 		// counted twice and read past the bound range.
-		pass.SetVertexBuffer(1, g.instanceBuf, off, size)
+		pass.SetVertexBuffer(1, d.instanceBuf, off, size)
 		pass.SetIndexBuffer(gm.ibuf, wgpu.IndexFormatUint32, 0, gm.ibufSize)
 		pass.DrawIndexed(gm.indexCount, uint32(b.count), 0, 0, 0)
 	}
 
 	// Transparent draws: switch to the blended pipeline (group-0 frame bind group
 	// is layout-compatible and stays bound) and draw each sorted instance.
-	if len(g.tItems) > 0 {
+	if len(d.tItems) > 0 {
 		pass.SetPipeline(g.transparentPipeline)
-		for i, it := range g.tItems {
+		for i, it := range d.tItems {
 			gm := meshes.get(it.mesh)
 			if gm == nil {
 				continue
@@ -379,7 +388,7 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder) {
 			off := uint64((opaqueCount + i) * instanceStride)
 			pass.SetBindGroup(1, mat.bindGroup, nil)
 			pass.SetVertexBuffer(0, gm.vbuf, 0, gm.vbufSize)
-			pass.SetVertexBuffer(1, g.instanceBuf, off, uint64(instanceStride))
+			pass.SetVertexBuffer(1, d.instanceBuf, off, uint64(instanceStride))
 			pass.SetIndexBuffer(gm.ibuf, wgpu.IndexFormatUint32, 0, gm.ibufSize)
 			pass.DrawIndexed(gm.indexCount, 1, 0, 0, 0)
 		}

@@ -110,9 +110,10 @@ type GPU struct {
 	depthTex  *wgpu.Texture
 	depthView *wgpu.TextureView
 
-	// Per-instance model matrices, uploaded once per frame and indexed by draw.
-	instanceBuf *wgpu.Buffer
-	instanceCap int // capacity in instances (mat4s)
+	// draw holds the main scene pass's per-frame collection buffers and
+	// instance buffer; each SceneView carries its own drawState so extra
+	// passes never alias the main pass's GPU uploads within one submit.
+	draw drawState
 
 	// Frame uniform (camera + directional light + ambient + point count) and the
 	// point-light storage buffer.
@@ -155,19 +156,12 @@ type GPU struct {
 
 	cursorX, cursorY float64
 
-	// Reusable per-frame scratch (collected renderables, packed model matrices,
-	// mesh+material batches, packed point lights) to avoid steady-state allocation.
-	items     []renderItem
-	tItems    []renderItem // transparent items, sorted back-to-front each frame
-	scratch   []instanceData
-	batches   []meshBatch
+	// Reusable per-frame scratch for light packing (camera-independent, shared
+	// by every pass) and the frame uniform contents, kept so SceneView passes
+	// can copy the light section without re-collecting.
 	collected []collectedPoint
 	lights    []pointLightGPU
 	frameUBO  [frameUBOFloats]float32
-
-	// viewFrustum is the current frame's six clipping planes, rebuilt each frame
-	// in drawMeshes and used to cull entities whose world bounds fall outside it.
-	viewFrustum frustum
 
 	// Open frame state, shared between the render and present systems (both run on
 	// the main goroutine in PostUpdate). frameActive is false when the surface
@@ -187,6 +181,25 @@ type GPU struct {
 	// offscreen RenderTarget; overlays still draw to the surface in a second
 	// pass. Set via SetSceneTarget; the caller owns the target's lifetime.
 	target *RenderTarget
+
+	// camOverride, when non-nil, replaces the Camera3D resource for the main
+	// scene pass (frame uniforms, culling, transparent sort). Set via
+	// SetSceneCamera; package-level helpers like ScreenToRay still use the
+	// resource.
+	camOverride *Camera3D
+
+	// views are the registered extra scene passes (SceneView), each rendered
+	// into its own target with its own camera before the main pass.
+	views []*SceneView
+}
+
+// sceneCam returns the camera driving the main scene pass: the override when
+// set, else the Camera3D resource.
+func (g *GPU) sceneCam(c *app.Ctx) *Camera3D {
+	if g.camOverride != nil {
+		return g.camOverride
+	}
+	return app.GetResource[Camera3D](c)
 }
 
 // sizeDefaults returns the plugin's window size and title with zero values
@@ -350,9 +363,13 @@ func releaseGPU(g *GPU) {
 	if g.frameBuf != nil {
 		g.frameBuf.Release()
 	}
-	if g.instanceBuf != nil {
-		g.instanceBuf.Release()
+	if g.draw.instanceBuf != nil {
+		g.draw.instanceBuf.Release()
 	}
+	for _, v := range g.views {
+		v.releaseGPU()
+	}
+	g.views = nil
 	if g.transparentPipeline != nil {
 		g.transparentPipeline.Release()
 	}
