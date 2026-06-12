@@ -5,9 +5,9 @@
 //     inside a docked ImGui "Scene" panel (render-to-texture + DockBuilder),
 //  2. click picking with viewport-local coordinates (Camera3D.ScreenToRay
 //     against the target's extents + render3d.Raycast),
-//  3. ImGuizmo manipulating an entity's Transform3D (translate/rotate/scale
-//     with W/E/R), which also smoke-tests that the ImGuizmo symbols link from
-//     cimgui-go's prebuilt static library.
+//  3. the hand-rolled editor/gizmo manipulating an entity's Transform3D
+//     (translate/rotate/scale with W/E/R, Ctrl to snap). The editor ships its
+//     own gizmo instead of the bundled ImGuizmo binding.
 //
 // Requires a GPU window, cgo, and a C/C++ toolchain:
 //
@@ -22,8 +22,8 @@ import (
 	"strconv"
 
 	"github.com/AllenDang/cimgui-go/imgui"
-	"github.com/AllenDang/cimgui-go/imguizmo"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/editor/gizmo"
 	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
@@ -49,7 +49,8 @@ type editorState struct {
 	selected    ecs.Entity
 	hasSelected bool
 
-	op imguizmo.OPERATION
+	op gizmo.Op
+	gz gizmo.Gizmo
 
 	camYaw, camPitch, camDist float32
 	camPivot                  m.Vec3
@@ -70,7 +71,7 @@ func main() {
 		ui.Plugin{},
 	)
 	app.InsertResource(a, &editorState{
-		op:       imguizmo.TRANSLATE,
+		op:       gizmo.Translate,
 		camYaw:   0.6,
 		camPitch: 0.5,
 		camDist:  9,
@@ -160,19 +161,16 @@ func applyCamera(c *app.Ctx) {
 // panel (offscreen target + picking + gizmo).
 func editorUI(c *app.Ctx) {
 	ed := app.GetResource[editorState](c)
-	if os.Getenv("SPLITI_SPIKE_NOBEGIN") == "" {
-		imguizmo.BeginFrame()
-	}
 
 	// W/E/R switch the gizmo operation (unless typing in a widget).
 	if !imgui.CurrentIO().WantCaptureKeyboard() {
 		switch {
 		case imgui.IsKeyPressedBool(imgui.KeyW):
-			ed.op = imguizmo.TRANSLATE
+			ed.op = gizmo.Translate
 		case imgui.IsKeyPressedBool(imgui.KeyE):
-			ed.op = imguizmo.ROTATE
+			ed.op = gizmo.Rotate
 		case imgui.IsKeyPressedBool(imgui.KeyR):
-			ed.op = imguizmo.SCALE
+			ed.op = gizmo.Scale
 		}
 	}
 
@@ -222,9 +220,6 @@ func drawDockHost(ed *editorState) imgui.ID {
 func drawObjectsPanel(c *app.Ctx, ed *editorState) {
 	imgui.Begin("Objects")
 	imgui.TextUnformatted(fmt.Sprintf("gizmo: %s  (W/E/R)", opName(ed.op)))
-	if os.Getenv("SPLITI_SPIKE_THUMB") != "" && ed.texID != 0 {
-		imgui.Image(*imgui.NewTextureRefTextureID(ed.texID), imgui.Vec2{X: 320, Y: 180})
-	}
 	imgui.Separator()
 	app.Query2[render3d.MeshRenderer, render3d.Transform3D](c,
 		func(e ecs.Entity, mr *render3d.MeshRenderer, _ *render3d.Transform3D) {
@@ -259,17 +254,6 @@ func drawScenePanel(c *app.Ctx, ed *editorState) {
 
 	cam := app.GetResource[render3d.Camera3D](c)
 
-	// Fullscreen-scene mode (no offscreen target): used to isolate render-target
-	// interactions; the gizmo manipulates against the whole window rect.
-	if os.Getenv("SPLITI_SPIKE_NOTARGET") != "" {
-		fbW, fbH := render3d.Size(c)
-		if ed.hasSelected {
-			drawGizmoFor(c, ed, imgui.Vec2{}, imgui.Vec2{X: float32(fbW), Y: float32(fbH)})
-		}
-		imgui.End()
-		return
-	}
-
 	// Create / resize the offscreen target to the panel size; keep the ImGui
 	// texture id stable across resizes via ui.UpdateTexture.
 	if ed.rt == nil {
@@ -287,13 +271,7 @@ func drawScenePanel(c *app.Ctx, ed *editorState) {
 	cam.SetAspect(float32(w) / float32(h))
 
 	imageMin := imgui.CursorScreenPos()
-	if os.Getenv("SPLITI_SPIKE_REDBG") != "" {
-		imgui.ImageWithBgV(*imgui.NewTextureRefTextureID(ed.texID), avail,
-			imgui.Vec2{}, imgui.Vec2{X: 1, Y: 1},
-			imgui.Vec4{X: 1, Y: 0, Z: 0, W: 1}, imgui.Vec4{X: 1, Y: 1, Z: 1, W: 1})
-	} else {
-		imgui.Image(*imgui.NewTextureRefTextureID(ed.texID), avail)
-	}
+	imgui.Image(*imgui.NewTextureRefTextureID(ed.texID), avail)
 	hovered := imgui.IsItemHovered()
 
 	// Orbit camera: right-drag rotates, wheel zooms — only while the cursor is
@@ -314,8 +292,7 @@ func drawScenePanel(c *app.Ctx, ed *editorState) {
 
 	// Click picking: viewport-local pixel -> ray (RT extents) -> nearest mesh.
 	// Skipped while the gizmo is hot so grabbing a handle never re-picks.
-	if hovered && imgui.IsMouseClickedBool(imgui.MouseButtonLeft) &&
-		!imguizmo.IsOver() && !imguizmo.IsUsing() {
+	if hovered && imgui.IsMouseClickedBool(imgui.MouseButtonLeft) && !ed.gz.Over() {
 		mp := imgui.MousePos()
 		lx := float64(mp.X - imageMin.X)
 		ly := float64(mp.Y - imageMin.Y)
@@ -335,9 +312,9 @@ func drawScenePanel(c *app.Ctx, ed *editorState) {
 	imgui.End()
 }
 
-// drawGizmoFor runs ImGuizmo for the selected entity and writes the manipulated
-// matrix back into its Transform3D (spike entities have no Parent, so the
-// global matrix is the local one).
+// drawGizmoFor runs the transform gizmo for the selected entity and writes the
+// manipulated matrix back into its Transform3D (spike entities have no Parent,
+// so the global matrix is the local one).
 func drawGizmoFor(c *app.Ctx, ed *editorState, imageMin, size imgui.Vec2) {
 	world := c.World()
 	if !world.Alive(ed.selected) {
@@ -351,27 +328,34 @@ func drawGizmoFor(c *app.Ctx, ed *editorState, imageMin, size imgui.Vec2) {
 	}
 
 	cam := app.GetResource[render3d.Camera3D](c)
-	view := cam.View()
-	proj := cam.Projection()
 	model := gtMap.Get(ed.selected).Matrix
 
-	if os.Getenv("SPLITI_SPIKE_NODRAWLIST") == "" {
-		imguizmo.SetDrawlist()
+	// Ctrl snaps: half-units, 15 degrees, scale tenths.
+	var snap float32
+	if imgui.CurrentIO().KeyCtrl() {
+		switch ed.op {
+		case gizmo.Rotate:
+			snap = 15
+		case gizmo.Scale:
+			snap = 0.1
+		default:
+			snap = 0.5
+		}
 	}
-	imguizmo.SetOrthographic(false)
-	if os.Getenv("SPLITI_SPIKE_TINYRECT") != "" {
-		imguizmo.SetRect(imageMin.X, imageMin.Y, 64, 64)
-	} else {
-		imguizmo.SetRect(imageMin.X, imageMin.Y, size.X, size.Y)
+
+	mouse := imgui.MousePos()
+	f := gizmo.Frame{
+		View:     cam.View(),
+		Proj:     cam.Projection(),
+		RectMin:  m.Vec2{X: imageMin.X, Y: imageMin.Y},
+		RectSize: m.Vec2{X: size.X, Y: size.Y},
+		MousePos: m.Vec2{X: mouse.X, Y: mouse.Y},
+		// Poll the windowing layer: ImGui eats the release event, so an
+		// ImGui-sourced "down" would leave the drag stuck.
+		MouseDown: render3d.MouseButtonDown(c, inputs.MouseButtonLeft),
+		Snap:      snap,
 	}
-	if os.Getenv("SPLITI_SPIKE_NOMANIP") != "" {
-		return
-	}
-	used := imguizmo.Manipulate(&view[0], &proj[0], ed.op, imguizmo.WORLD, &model[0])
-	if os.Getenv("SPLITI_SPIKE_DEBUG") != "" {
-		fmt.Printf("frame: manip=%v model=%v view0=%v proj0=%v\n", used, model[12:15], view[0], proj[0])
-	}
-	if used {
+	if ed.gz.Manipulate(imgui.WindowDrawList(), f, ed.op, gizmo.World, &model) {
 		t := tMap.Get(ed.selected)
 		t.Translation, t.Rotation, t.Scale = decomposeTRS(model)
 		// Write the global matrix too so the gizmo and render stay coherent
@@ -422,11 +406,11 @@ func quatFromAxes(x, y, z m.Vec3) m.Quat {
 	return q.Normalize()
 }
 
-func opName(op imguizmo.OPERATION) string {
+func opName(op gizmo.Op) string {
 	switch op {
-	case imguizmo.ROTATE:
+	case gizmo.Rotate:
 		return "rotate"
-	case imguizmo.SCALE:
+	case gizmo.Scale:
 		return "scale"
 	default:
 		return "translate"

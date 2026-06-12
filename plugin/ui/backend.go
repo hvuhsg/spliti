@@ -4,7 +4,6 @@ package ui
 
 import (
 	_ "embed"
-	"os"
 	"unsafe"
 
 	"github.com/AllenDang/cimgui-go/imgui"
@@ -12,9 +11,6 @@ import (
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 )
-
-// debugCmds dumps every recorded ImGui draw command — temporary M0 diagnostics.
-var debugCmds = os.Getenv("SPLITI_UI_DEBUG_CMDS") != ""
 
 //go:embed imgui.wgsl
 var imguiShaderCode string
@@ -318,22 +314,6 @@ func (b *Backend) render(c *app.Ctx, dd *imgui.DrawData) {
 		}
 		vptr, vbytes := dl.GetVertexBuffer()
 		iptr, ibytes := dl.GetIndexBuffer()
-		if debugCmds {
-			println("ui.list", i, "vbytes", vbytes, "ibytes", ibytes,
-				"vbase", spans[i].vtxBase, "ibase", spans[i].idxBase)
-			if vbytes == 80 { // suspected viewport-image quad: dump its vertices
-				vs := unsafe.Slice((*float32)(vptr), 20)
-				cols := unsafe.Slice((*uint32)(vptr), 20)
-				for v := 0; v < 4; v++ {
-					println("  vtx", v,
-						"x", int(vs[v*5+0]), "y", int(vs[v*5+1]),
-						"u", int(vs[v*5+2]*1000), "v", int(vs[v*5+3]*1000),
-						"col", cols[v*5+4])
-				}
-				is := unsafe.Slice((*uint16)(iptr), ibytes/2)
-				println("  idx", int(is[0]), int(is[1]), int(is[2]), int(is[3]), int(is[4]), int(is[5]))
-			}
-		}
 		if vbytes > 0 {
 			b.vtxData = append(b.vtxData, unsafe.Slice((*byte)(vptr), vbytes)...)
 		}
@@ -343,6 +323,13 @@ func (b *Backend) render(c *app.Ctx, dd *imgui.DrawData) {
 	}
 	if len(b.vtxData) == 0 || len(b.idxData) == 0 {
 		return
+	}
+	// WriteBuffer requires the data size to be a multiple of 4. Vertices are
+	// 20-byte strided so they always comply; indices are 2 bytes each, so an
+	// odd index count must be padded or the whole upload is rejected — which
+	// silently freezes the GPU-side geometry at the last accepted frame.
+	if len(b.idxData)%4 != 0 {
+		b.idxData = append(b.idxData, 0, 0)
 	}
 	b.ensureBuffers(c, len(b.vtxData), len(b.idxData))
 	_ = queue.WriteBuffer(b.vbuf, 0, b.vtxData)
@@ -368,11 +355,6 @@ func (b *Backend) render(c *app.Ctx, dd *imgui.DrawData) {
 	fbW, fbH := dispSize.X, dispSize.Y
 	for i, dl := range lists {
 		for _, cmd := range dl.Commands() {
-			if debugCmds {
-				clip := cmd.ClipRect()
-				println("ui.cmd list", i, "tex", uint64(cmd.TexID()), "known", b.textures[cmd.TexID()] != nil,
-					"elems", cmd.ElemCount(), "clip", int(clip.X), int(clip.Y), int(clip.Z), int(clip.W))
-			}
 			if cmd.HasUserCallback() {
 				continue // user callbacks aren't supported in this backend
 			}
@@ -388,8 +370,8 @@ func (b *Backend) render(c *app.Ctx, dd *imgui.DrawData) {
 			if te == nil {
 				continue
 			}
-			pass.SetScissorRect(uint32(x0), uint32(y0), uint32(x1-x0), uint32(y1-y0))
 			pass.SetBindGroup(1, te.bg, nil)
+			pass.SetScissorRect(uint32(x0), uint32(y0), uint32(x1-x0), uint32(y1-y0))
 			pass.DrawIndexed(
 				cmd.ElemCount(), 1,
 				spans[i].idxBase+cmd.IdxOffset(),
