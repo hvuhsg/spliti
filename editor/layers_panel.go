@@ -57,8 +57,9 @@ func (st *state) saveLayers() {
 }
 
 // drawLayers is the collision-layers panel: one row per named bit, editable
-// in place, plus an append row. Bits cannot be removed — that would silently
-// renumber every later layer in compiled game code.
+// in place, plus an append row. Only the highest bit can be removed (an "x" on
+// the last row) — popping the tail renumbers nothing, whereas deleting a middle
+// bit would silently renumber every later layer in compiled game code.
 func drawLayers(c *app.Ctx, st *state) {
 	if !imgui.Begin("Layers") {
 		imgui.End()
@@ -79,6 +80,7 @@ func drawLayers(c *app.Ctx, st *state) {
 		imgui.BeginDisabled()
 	}
 	for bit, name := range st.layers.Names {
+		last := bit == len(st.layers.Names)-1
 		imgui.PushIDInt(int32(bit))
 		imgui.TextDisabled(fmt.Sprintf("%2d", bit))
 		imgui.SameLine()
@@ -86,7 +88,13 @@ func drawLayers(c *app.Ctx, st *state) {
 		if buf, ok := st.layerEdit[bit]; ok {
 			val = buf
 		}
-		imgui.SetNextItemWidth(-1)
+		// Reserve room for the remove button on the last row only; only the
+		// highest bit may be popped without renumbering the others.
+		if last {
+			imgui.SetNextItemWidth(-24)
+		} else {
+			imgui.SetNextItemWidth(-1)
+		}
 		imgui.InputTextWithHint("##name", "(unnamed)", &val, 0, nil)
 		if imgui.IsItemActive() {
 			st.layerEdit[bit] = val
@@ -101,6 +109,20 @@ func drawLayers(c *app.Ctx, st *state) {
 			}
 		} else {
 			delete(st.layerEdit, bit)
+		}
+		if last {
+			imgui.SameLine()
+			if imgui.SmallButton("x") {
+				delete(st.layerEdit, bit)
+				if err := st.layers.Remove(bit); err != nil {
+					st.status(err.Error())
+				} else {
+					st.saveLayers()
+				}
+			}
+			if imgui.IsItemHovered() {
+				imgui.SetTooltip("remove this layer")
+			}
 		}
 		imgui.PopID()
 	}

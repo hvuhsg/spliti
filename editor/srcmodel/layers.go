@@ -24,9 +24,9 @@ import (
 //		LayerEnemy
 //	)
 //
-// The editor's Layers panel renames and appends entries; removing a layer is
-// not supported (it would silently renumber every later bit). Blank (`_`)
-// entries hold a bit position without naming it.
+// The editor's Layers panel renames and appends entries, and can pop the
+// highest bit (removing a middle bit is refused — it would silently renumber
+// every later bit). Blank (`_`) entries hold a bit position without naming it.
 type LayersFile struct {
 	Path  string
 	Pkg   string   // the file's package name, the qualifier scene source uses
@@ -170,6 +170,23 @@ func (lf *LayersFile) Add(name string) error {
 	vs.Decs.After = dst.NewLine
 	lf.decl.Specs = append(lf.decl.Specs, vs)
 	lf.Names = append(lf.Names, name)
+	return nil
+}
+
+// Remove drops a layer. Only the highest bit can be removed: deleting a middle
+// bit would silently renumber every later layer in compiled game code, so that
+// is refused. Popping the last bit leaves all lower bits unchanged (the first
+// spec, which carries the `1 << iota` expression, is only removed when it is
+// the sole entry).
+func (lf *LayersFile) Remove(bit int) error {
+	if bit < 0 || bit >= len(lf.Names) {
+		return fmt.Errorf("srcmodel: layer bit %d out of range", bit)
+	}
+	if bit != len(lf.Names)-1 {
+		return fmt.Errorf("srcmodel: only the last layer can be removed (removing bit %d would renumber later layers)", bit)
+	}
+	lf.decl.Specs = lf.decl.Specs[:bit]
+	lf.Names = lf.Names[:bit]
 	return nil
 }
 

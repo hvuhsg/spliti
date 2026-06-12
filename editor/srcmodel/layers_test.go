@@ -109,3 +109,46 @@ func TestLayersRenameAddSave(t *testing.T) {
 		t.Fatalf("rename lost: %v", lf2.Names)
 	}
 }
+
+func TestLayersRemove(t *testing.T) {
+	path := writeLayersFile(t)
+	lf, err := ParseLayersFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Middle bits cannot be removed (would renumber later layers).
+	if err := lf.Remove(1); err == nil {
+		t.Fatal("removing a middle bit was accepted")
+	}
+	if err := lf.Remove(99); err == nil {
+		t.Fatal("removing an out-of-range bit was accepted")
+	}
+	// Popping the highest bit is allowed and leaves lower bits intact.
+	if err := lf.Remove(len(lf.Names) - 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := lf.Save(); err != nil {
+		t.Fatal(err)
+	}
+	lf2, err := ParseLayersFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"LayerDefault", "LayerPlayer", ""}
+	if len(lf2.Names) != len(want) {
+		t.Fatalf("Names = %v, want %v", lf2.Names, want)
+	}
+	for i, n := range want {
+		if lf2.Names[i] != n {
+			t.Fatalf("Names[%d] = %q, want %q", i, lf2.Names[i], n)
+		}
+	}
+	if _, ok := lf2.Bit("LayerEnemy"); ok {
+		t.Fatal("LayerEnemy survived removal")
+	}
+	// The iota expression on the first spec must survive: bit 1 is still 1<<1.
+	out, _ := os.ReadFile(path)
+	if !strings.Contains(string(out), "1 << iota") {
+		t.Fatalf("iota expression lost:\n%s", out)
+	}
+}

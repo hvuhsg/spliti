@@ -361,7 +361,11 @@ func editorUI(c *app.Ctx) {
 
 func (st *state) handleShortcuts(c *app.Ctx) {
 	io := imgui.CurrentIO()
-	if io.WantCaptureKeyboard() {
+	// Gate on WantTextInput, not WantCaptureKeyboard: with NavEnableKeyboard
+	// set, the latter is true whenever any window (including the focused Scene
+	// viewport) has focus, which would swallow W/E/R and the other shortcuts.
+	// WantTextInput is true only while a text field is being edited.
+	if io.WantTextInput() {
 		return
 	}
 	ctrl := io.KeyCtrl() || io.KeySuper()

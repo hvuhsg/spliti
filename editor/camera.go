@@ -59,8 +59,10 @@ func (r *cameraRig) handleInput(hovered bool) {
 		}
 	}
 	// Fly: WASD(+QE for down/up) moves the pivot while the right button is
-	// held, scaled by distance so it feels constant at any zoom.
-	if rmb && !io.WantCaptureKeyboard() {
+	// held, scaled by distance so it feels constant at any zoom. Gate on
+	// WantTextInput, not WantCaptureKeyboard — NavEnableKeyboard makes the
+	// latter true whenever the viewport is focused, which would block flight.
+	if rmb && !io.WantTextInput() {
 		fwd, right := r.flyBasis()
 		s := r.dist * 0.02
 		if imgui.IsKeyDown(imgui.KeyLeftShift) {
