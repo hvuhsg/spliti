@@ -143,6 +143,24 @@ func TestSetComponentValueUpsertsLine(t *testing.T) {
 	}
 }
 
+// TestSetComponentValueAddsOwnImport guards the first-component-of-a-package
+// case: even a flat struct with no import-needing fields must pull in its own
+// package, or the written scene.Set line references an unimported qualifier and
+// the file no longer compiles. testHealth's package (srcmodel) is not imported
+// by the test scene, so its appearance proves the type's own import was added.
+func TestSetComponentValueAddsOwnImport(t *testing.T) {
+	s := parseTestScene(t)
+	// "ground" has no prior Set line, so this is a fresh insertion.
+	v := reflect.ValueOf(testHealth{Max: 30, Current: 30})
+	if err := s.SetComponentValue("ground", "components.Health", v); err != nil {
+		t.Fatal(err)
+	}
+	src := render(t, s)
+	if !strings.Contains(src, `"github.com/hvuhsg/spliti/editor/srcmodel"`) {
+		t.Fatalf("component's own package import missing:\n%s", src)
+	}
+}
+
 func TestSetComponentValueNestedStructAddsImport(t *testing.T) {
 	s := parseTestScene(t)
 	v := reflect.ValueOf(testNested{

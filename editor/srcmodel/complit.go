@@ -134,6 +134,12 @@ func litForValue(typeName string, v reflect.Value, ctx *encCtx) (*dst.CompositeL
 	var imports []string
 	lit := &dst.CompositeLit{Type: typeExpr}
 	rt := v.Type()
+	// The composite literal names its own type (typeName), so the file must
+	// import that type's package — even when no field needs an import. Nested
+	// structs reach here too, so this covers every literal type in the tree.
+	if pp := rt.PkgPath(); pp != "" {
+		imports = append(imports, pp)
+	}
 	for i := 0; i < rt.NumField(); i++ {
 		f := rt.Field(i)
 		fv := v.Field(i)
@@ -204,7 +210,8 @@ func valueExpr(v reflect.Value, ctx *encCtx) (dst.Expr, []string, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		return lit, append(imports, rt.PkgPath()), nil
+		// litForValue already includes rt's own package import.
+		return lit, imports, nil
 	case reflect.Slice, reflect.Array:
 		eltType, imports, err := typeExprFor(v.Type().Elem())
 		if err != nil {
