@@ -19,6 +19,24 @@ func SpawnMesh(c *app.Commands, t Transform3D, mesh, material string) {
 	})
 }
 
+// NewMesh creates a renderable entity immediately (unlike SpawnMesh, which
+// queues through Commands) and returns it. Prefab functions — the
+// //spliti:entity functions the editor spawns from scene files — use it so the
+// entity can be named and parented in the same setup pass. Do not call while a
+// query is iterating.
+func NewMesh(c *app.Ctx, t Transform3D, mesh, material string) ecs.Entity {
+	mp := generic.NewMap4[Transform3D, GlobalTransform, MeshRenderer, MaterialRef](c.World())
+	return mp.NewWith(&t, &GlobalTransform{Matrix: m.Identity4()},
+		&MeshRenderer{Mesh: mesh}, &MaterialRef{Material: material})
+}
+
+// NewPointLight creates a point-light entity immediately and returns it — the
+// prefab-friendly counterpart of SpawnPointLight.
+func NewPointLight(c *app.Ctx, t Transform3D, light PointLight) ecs.Entity {
+	mp := generic.NewMap3[Transform3D, GlobalTransform, PointLight](c.World())
+	return mp.NewWith(&t, &GlobalTransform{Matrix: m.Identity4()}, &light)
+}
+
 // SpawnMeshChild is SpawnMesh with a Parent: the entity's transform is composed
 // on top of parent's world transform each frame.
 func SpawnMeshChild(c *app.Commands, parent ecs.Entity, t Transform3D, mesh, material string) {

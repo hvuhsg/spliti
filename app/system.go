@@ -28,6 +28,10 @@ func (s *SystemConfig) Label(name string) *SystemConfig {
 	return s
 }
 
+// GetLabel returns the label assigned via Label, or "" if none. Interceptors
+// (see App.SetSystemInterceptor) use it to identify systems.
+func (s *SystemConfig) GetLabel() string { return s.label }
+
 // Before declares this system must run before each of the labeled systems.
 func (s *SystemConfig) Before(labels ...string) *SystemConfig {
 	s.before = append(s.before, labels...)
