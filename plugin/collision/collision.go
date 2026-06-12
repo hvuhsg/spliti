@@ -13,9 +13,7 @@
 //
 // The package imports only the pure-Go math library plugin/render3d/m (never
 // the GPU renderer), so it builds and tests without cgo and is safe to drop
-// into any backend. The editor's runtime plugin re-uses this package: its
-// Bounds and CollisionEvent are type aliases for Collider and CollisionEvent
-// here.
+// into any backend.
 //
 // Out of scope (see docs/roadmap.md): physics resolution (velocity, gravity,
 // restitution), non-box shapes (circles, rotated bodies), and continuous
@@ -68,8 +66,8 @@ type Config struct {
 // NewSystem returns the 2D collision system: it collects every
 // (tui.Position, Collider) entity, runs the spatial-hash broad phase, and emits
 // a CollisionEvent for each overlapping, layer-compatible pair. Returning a
-// SystemFunc lets callers (e.g. the runtime plugin) control labelling and
-// ordering instead of taking the bundled Plugin.
+// SystemFunc lets callers control labelling and ordering instead of taking
+// the bundled Plugin.
 func NewSystem(cfg Config) app.SystemFunc {
 	cell := cfg.CellSize
 	if cell <= 0 {

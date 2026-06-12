@@ -55,8 +55,7 @@ Severity: 🔴 blocking · 🟠 high · 🟡 moderate / genre-dependent
 - [x] **Collision + spatial partitioning** — done: collision is now the reusable,
       cgo-free `plugin/collision` package with a uniform spatial-hash-grid
       broadphase (2D over `tui.Position`, 3D over a caller-supplied position) and
-      collision layers/masks for filtering. `runtime`'s `Bounds`/`CollisionEvent`
-      are aliases for it. Still missing (future work): physics integration
+      collision layers/masks for filtering. Still missing (future work): physics integration
       (velocity/gravity/restitution), circles/rotated bodies, and continuous
       collision (fast objects still tunnel).
 - [x] **UI toolkit** — done for development needs: `plugin/ui` is Dear ImGui
@@ -69,9 +68,9 @@ Severity: 🔴 blocking · 🟠 high · 🟡 moderate / genre-dependent
       textures, node hierarchy via `SpawnModel`, synthesized normals/tangents)
       with real error propagation. Still missing: async/streaming loads, OBJ,
       texture atlases, hot-reload, and glTF animation/skinning (see below).
-- [ ] **Runtime save/load** — scene *load* exists but *save* is editor-only
-      (`editor/scene_load.go`); shipped games can't persist player data. Expose
-      a save path usable at runtime.
+- [ ] **Runtime save/load** — scenes live in Go source (the editor's
+      code-as-truth format), so static content needs no loader; shipped games
+      still can't persist *player data*. Expose a save path usable at runtime.
 
 ## 🟡 Moderate / genre-dependent
 

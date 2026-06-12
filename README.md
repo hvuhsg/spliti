@@ -57,7 +57,7 @@ Working today:
 - **Browser (WebAssembly)**: both GPU backends compile to `js/wasm`, driving the page's native WebGPU and DOM input, with no cgo. Game code is unchanged — input flows through the backend-agnostic `plugin/inputs` events. Build with `scripts/build-wasm.sh` and serve with `go run ./cmd/webserve`.
 - The engine keeps owning the loop in every case — no render backend takes over `app.Run()`.
 - **Audio**: drop in `audio.Plugin` for a software mixer — WAV/OGG/MP3 (and raw PCM) assets, per-voice volume/pan/pitch, looping, master/sfx/music buses, streamed music with fade/crossfade, and 2D/3D spatial audio (the `audio/spatial3d` subpackage makes the render3d camera the listener). Plays natively **and in the browser**, degrades to a silent null sink when no device exists (CI), and every gain change is click-free. See [docs/audio.md](docs/audio.md); Snake plays generated chiptune music + SFX.
-- **Visual editor**: a tcell-based editor (`editor/`) for authoring scenes from data — entities, components, and behaviors from the `runtime` plugin's built-in vocabulary, saved/loaded as project files. See `examples/editor-demo`.
+- **Visual editor**: a Dear ImGui scene editor (`editor/` + the `spliti` CLI) whose save format is the game's own Go source. Dragging a prefab into the viewport adds a `scene.Spawn(...)` line, gizmo and inspector edits rewrite the literals in `game/scenes/*.go`, hand edits flow back into the running editor through a file watcher, and every change is undoable. `spliti new mygame && cd mygame && spliti edit`.
 - TCP **lockstep multiplayer** for 2..N players. Drop in `network.Plugin`, read `PlayerKey` events, stay deterministic. See [docs/network.md](docs/network.md).
 - Examples: single-player Snake (`examples/snake`), networked two-player Snake (`examples/snake-net`), a networked stick-figure fighter (`examples/stick-fight`), a single-player fighter vs AI (`examples/stick-fight-ai`), an auto-shooter (`examples/survivors`), a first-person raycaster (`examples/doom`), and five arcade classics — Pong, Tetris, Breakout, Space Invaders, and Pac-Man. GPU showcases: the 2D `examples/gpu-demo`, the 3D `examples/render3d-demo`, an interactive radio-wave teaching game (`examples/radio`), a 3D radio-propagation visualizer (`examples/radio3d`), and a physically-accurate, broadband radio-wave simulator (`examples/radiosim`) with Fresnel materials, wall transmission, UTD/knife-edge diffraction, a thermal-noise receiver chain, atmospheric loss, and a swappable image-method / real-time SBR engine.
 
@@ -151,7 +151,9 @@ The 3D backend's design and component surface are documented in the `plugin/rend
 spliti/
 ├── app/                       # core engine: App, Plugin, Schedule, Ctx, ECS helpers
 ├── schedule/                  # named stages (Startup, Update, FixedUpdate, …)
-├── editor/                    # tcell-based visual scene/entity editor
+├── editor/                    # ImGui visual editor: panels, gizmo, srcmodel (Go-source scenes)
+├── scene/                     # scene grammar runtime: Spawn/Set/Remove/Parent + Name identity
+├── cmd/spliti/                # project CLI: new, gen, edit, run, build [--wasm]
 ├── plugin/
 │   ├── time/                  # Time resource, FixedUpdate accumulator, frame pacing
 │   ├── terminal/              # tcell screen as a shared resource
@@ -162,11 +164,10 @@ spliti/
 │   ├── audio/                 # software mixer over oto: SFX, music, buses, spatial
 │   ├── webgpu/                # 2D GPU window: textured-sprite render via WebGPU + GLFW (cgo)
 │   ├── render3d/              # 3D GPU window: PBR meshes, camera, lights, instancing (cgo)
-│   ├── runtime/               # data-driven component/system vocabulary for the editor
 │   ├── network/               # lockstep multiplayer over TCP
 │   └── defaultplugins/        # bundle of time + terminal + input + tui
 ├── examples/                  # snake, stick-fight, survivors, doom, arcade classics,
-│                              #   gpu-demo, render3d-demo, radio, radio3d, editor-demo
+│                              #   gpu-demo, render3d-demo, radio, radio3d
 └── docs/
 ```
 

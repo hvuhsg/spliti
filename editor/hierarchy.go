@@ -3,6 +3,7 @@ package editor
 import (
 	"fmt"
 	"sort"
+	"unsafe"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/hvuhsg/spliti/app"
@@ -12,13 +13,19 @@ import (
 	"github.com/mlange-42/arche/generic"
 )
 
-// drawHierarchy lists the scene's named instances as a tree (read-only in M1:
-// selection only, no rename/reparent/delete).
+// hierarchyDragType tags ImGui drag-drop payloads originating from hierarchy
+// rows; the payload itself lives in state (cimgui's payload data is a raw
+// pointer, Go state is simpler and safer).
+const hierarchyDragType = "spliti-instance"
+
+// drawHierarchy lists the scene's named instances as a tree. Rows select on
+// click, carry a context menu (rename / duplicate / delete / unparent), and
+// reparent via drag and drop; dropping onto the panel background moves an
+// instance to the scene root.
 func drawHierarchy(c *app.Ctx, st *state) {
 	imgui.Begin("Hierarchy")
 	defer imgui.End()
 
-	// Collect named entities and their parent links.
 	type node struct {
 		e        ecs.Entity
 		name     string
@@ -61,6 +68,23 @@ func drawHierarchy(c *app.Ctx, st *state) {
 		if imgui.IsItemClicked() && !imgui.IsItemToggledOpen() {
 			st.selected, st.hasSelected = nd.e, true
 		}
+
+		if imgui.BeginDragDropSource() {
+			st.dragInstance = nd.name
+			imgui.SetDragDropPayload(hierarchyDragType, dummyPayload(), 1)
+			imgui.TextUnformatted(nd.name)
+			imgui.EndDragDropSource()
+		}
+		if imgui.BeginDragDropTarget() {
+			if imgui.AcceptDragDropPayload(hierarchyDragType) != nil && st.dragInstance != "" {
+				st.reparent(c, st.dragInstance, nd.name)
+				st.dragInstance = ""
+			}
+			imgui.EndDragDropTarget()
+		}
+
+		hierarchyContextMenu(c, st, nd.name, nd.e)
+
 		if open {
 			sortNodes(nd.children)
 			for _, ch := range nd.children {
@@ -76,4 +100,129 @@ func drawHierarchy(c *app.Ctx, st *state) {
 	if len(named) == 0 {
 		imgui.TextDisabled("no scene.Spawn instances")
 	}
+
+	// Remaining panel space is the "scene root" drop zone (unparent).
+	avail := imgui.ContentRegionAvail()
+	if avail.Y < 24 {
+		avail.Y = 24
+	}
+	imgui.InvisibleButton("##rootdrop", avail)
+	if imgui.BeginDragDropTarget() {
+		if imgui.AcceptDragDropPayload(hierarchyDragType) != nil && st.dragInstance != "" {
+			st.reparent(c, st.dragInstance, "")
+			st.dragInstance = ""
+		}
+		imgui.EndDragDropTarget()
+	}
+
+	drawRenamePopup(c, st)
 }
+
+func hierarchyContextMenu(c *app.Ctx, st *state, name string, e ecs.Entity) {
+	if !imgui.BeginPopupContextItem() {
+		return
+	}
+	st.selected, st.hasSelected = e, true
+	if imgui.MenuItemBool("Rename...") {
+		st.renameTarget, st.renameBuf = name, name
+	}
+	if imgui.MenuItemBool("Duplicate") {
+		st.duplicateSelection(c)
+	}
+	pm := generic.NewMap[render3d.Parent](c.World())
+	if pm.Has(e) && instanceName(c, pm.Get(e).Entity) != "" {
+		if imgui.MenuItemBool("Unparent") {
+			st.reparent(c, name, "")
+		}
+	}
+	imgui.Separator()
+	if imgui.MenuItemBool("Delete") {
+		st.push(c, &cmdDelete{root: name})
+	}
+	imgui.EndPopup()
+}
+
+// drawRenamePopup shows the modal rename editor opened from the context menu.
+func drawRenamePopup(c *app.Ctx, st *state) {
+	if st.renameTarget == "" {
+		return
+	}
+	imgui.OpenPopupStr("Rename instance")
+	if !imgui.BeginPopupModalV("Rename instance", nil, imgui.WindowFlagsAlwaysAutoResize) {
+		return
+	}
+	enter := imgui.InputTextWithHint("##rename", "instance name", &st.renameBuf, imgui.InputTextFlagsEnterReturnsTrue, nil)
+	imgui.SetItemDefaultFocus()
+	if imgui.Button("Rename") || enter {
+		if st.renameBuf != st.renameTarget {
+			st.push(c, &cmdRename{old: st.renameTarget, new: st.renameBuf})
+		}
+		st.renameTarget = ""
+		imgui.CloseCurrentPopup()
+	}
+	imgui.SameLine()
+	if imgui.Button("Cancel") {
+		st.renameTarget = ""
+		imgui.CloseCurrentPopup()
+	}
+	imgui.EndPopup()
+}
+
+// reparent pushes a reparent command, recomputing the local transform so the
+// instance keeps its world placement under the new parent.
+func (st *state) reparent(c *app.Ctx, instance, newParent string) {
+	e, ok := entityByInstance(c, instance)
+	if !ok || instance == newParent {
+		return
+	}
+	w := c.World()
+	pm := generic.NewMap[render3d.Parent](w)
+	oldParent := ""
+	if pm.Has(e) {
+		oldParent = instanceName(c, pm.Get(e).Entity)
+	}
+	if oldParent == newParent {
+		return
+	}
+	tm := generic.NewMap[render3d.Transform3D](w)
+	gtm := generic.NewMap[render3d.GlobalTransform](w)
+	if !tm.Has(e) || !gtm.Has(e) {
+		return
+	}
+	oldLocal := *tm.Get(e)
+	global := gtm.Get(e).Matrix
+
+	newLocalMat := global
+	if newParent != "" {
+		pe, ok := entityByInstance(c, newParent)
+		if !ok || !gtm.Has(pe) {
+			st.status(fmt.Sprintf("cannot parent under %q", newParent))
+			return
+		}
+		if pe == e || isDescendant(c, pe, e) {
+			st.status("cannot parent an instance under its own subtree")
+			return
+		}
+		inv, ok := gtm.Get(pe).Matrix.Inverse()
+		if !ok {
+			st.status("parent transform is degenerate")
+			return
+		}
+		newLocalMat = inv.Mul(global)
+	}
+	var newLocal render3d.Transform3D
+	newLocal.Translation, newLocal.Rotation, newLocal.Scale = decomposeTRS(newLocalMat)
+
+	st.push(c, &cmdReparent{
+		instance:  instance,
+		oldParent: oldParent, newParent: newParent,
+		oldLocal: oldLocal, newLocal: newLocal,
+	})
+}
+
+// dummyPayload is the 1-byte ImGui drag payload — the real payload travels
+// through editor state (dragInstance/dragPrefab); imgui copies the byte
+// immediately, so the pointer's lifetime is the call.
+var payloadByte byte
+
+func dummyPayload() uintptr { return uintptr(unsafe.Pointer(&payloadByte)) }

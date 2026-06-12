@@ -192,17 +192,8 @@ func (s *Scene) AddSpawn(instance, prefab string, t Transform) (*Spawn, error) {
 	stmt.Decs.Before = dst.NewLine
 	stmt.Decs.After = dst.NewLine
 	s.fn.Body.List = append(s.fn.Body.List, stmt)
-
-	nt := t
-	sp := &Spawn{
-		Instance:   instance,
-		Prefab:     prefab,
-		Transform:  &nt,
-		stmt:       stmt,
-		prefabCall: prefabCall,
-	}
-	s.Spawns = append(s.Spawns, sp)
-	return sp, nil
+	s.rescan()
+	return s.Spawn(instance), nil
 }
 
 // chainExpr builds the canonical render3d.XForm()... expression for t.

@@ -3,17 +3,22 @@ package editor
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/editor/registry"
+	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	"github.com/mlange-42/arche/ecs"
 )
 
 // drawInspector shows the selected entity's components and edits them live.
-// Transform3D edits additionally schedule a debounced write back to the scene
-// source file (other components become writable in M2 via scene.Set).
+// Edits write straight into world storage while a widget is active; when the
+// gesture ends (IsItemDeactivatedAfterEdit) the whole change is committed as
+// one undo command, which also writes the scene source: Transform3D goes into
+// the spawn line's transform chain, every other component into a scene.Set
+// override line.
 func drawInspector(c *app.Ctx, st *state) {
 	imgui.Begin("Inspector")
 	defer imgui.End()
@@ -27,27 +32,105 @@ func drawInspector(c *app.Ctx, st *state) {
 	if inst != "" {
 		imgui.TextUnformatted(inst)
 	} else {
-		imgui.TextDisabled("(unnamed entity — edits are live-only)")
+		imgui.TextDisabled("(unnamed entity - edits are live-only)")
 	}
 	imgui.Separator()
 
+	var removeReq *registry.TypeInfo
 	for _, ti := range st.reg.On(c.World(), e) {
-		if !imgui.CollapsingHeaderBoolPtrV(ti.Name, nil, imgui.TreeNodeFlagsDefaultOpen) {
-			continue
-		}
-		comp := ti.Get(c.World(), e)
-		changed := false
 		imgui.PushIDStr(ti.Name)
-		for _, f := range ti.Fields {
-			if drawField(st, e, ti, f, f.Value(comp)) {
-				changed = true
+		open := imgui.CollapsingHeaderBoolPtrV(ti.Name, nil, imgui.TreeNodeFlagsDefaultOpen)
+		if imgui.BeginPopupContextItem() {
+			if imgui.MenuItemBool("Remove component") {
+				removeReq = ti
 			}
+			imgui.EndPopup()
+		}
+		if open {
+			drawComponent(c, st, e, inst, ti)
 		}
 		imgui.PopID()
-		if changed && ti.Name == "Transform3D" {
-			st.markTransformDirty(inst)
+	}
+	if removeReq != nil {
+		st.push(c, &cmdRemoveComponent{instance: inst, entity: e, typeName: removeReq.Name})
+	}
+
+	imgui.Separator()
+	drawAddComponent(c, st, e, inst)
+}
+
+// drawComponent renders one component's fields and handles gesture capture.
+func drawComponent(c *app.Ctx, st *state, e ecs.Entity, inst string, ti *registry.TypeInfo) {
+	w := c.World()
+	// Pre-draw snapshot: the gesture's "before" value must be read before any
+	// widget writes into live storage this frame.
+	pre := ti.Value(w, e)
+	gestureKey := fmt.Sprintf("%v/%s", e, ti.Name)
+
+	comp := ti.Get(w, e)
+	for _, f := range ti.Fields {
+		drawField(st, e, ti, f, f.Value(comp))
+		if imgui.IsItemActivated() {
+			if _, ok := st.editBefore[gestureKey]; !ok {
+				st.editBefore[gestureKey] = pre
+			}
+		}
+		if imgui.IsItemDeactivatedAfterEdit() {
+			before, ok := st.editBefore[gestureKey]
+			if !ok {
+				before = pre
+			}
+			delete(st.editBefore, gestureKey)
+			st.commitComponentEdit(c, e, inst, ti, before)
+		} else if imgui.IsItemDeactivated() {
+			delete(st.editBefore, gestureKey)
 		}
 	}
+}
+
+// commitComponentEdit pushes the finished gesture as one undo command.
+func (st *state) commitComponentEdit(c *app.Ctx, e ecs.Entity, inst string, ti *registry.TypeInfo, before any) {
+	after := ti.Value(c.World(), e)
+	if reflect.DeepEqual(before, after) {
+		return
+	}
+	if ti.Name == "Transform3D" {
+		st.push(c, &cmdTransform{
+			instance: inst, entity: e,
+			before: before.(render3d.Transform3D),
+			after:  after.(render3d.Transform3D),
+		})
+		return
+	}
+	st.push(c, st.newSetComponent(inst, e, ti, before, after))
+}
+
+// drawAddComponent is the "+ Add Component" button with a filterable popup of
+// registered types not present on the entity.
+func drawAddComponent(c *app.Ctx, st *state, e ecs.Entity, inst string) {
+	if imgui.ButtonV("+ Add Component", imgui.Vec2{X: -1}) {
+		st.addCompFilter = ""
+		imgui.OpenPopupStr("##addcomp")
+	}
+	if !imgui.BeginPopup("##addcomp") {
+		return
+	}
+	imgui.SetNextItemWidth(220)
+	imgui.InputTextWithHint("##filter", "filter...", &st.addCompFilter, 0, nil)
+	filter := strings.ToLower(st.addCompFilter)
+	for _, ti := range st.reg.Types() {
+		if ti.Hidden || ti.Has(c.World(), e) {
+			continue
+		}
+		if filter != "" && !strings.Contains(strings.ToLower(ti.Name), filter) {
+			continue
+		}
+		if imgui.SelectableBool(ti.Name) {
+			st.push(c, &cmdAddComponent{instance: inst, entity: e, typeName: ti.Name})
+			imgui.CloseCurrentPopup()
+		}
+	}
+	imgui.EndPopup()
 }
 
 // drawField renders the widget for one field and returns whether it changed

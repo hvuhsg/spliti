@@ -43,6 +43,12 @@ type TypeInfo struct {
 	Get func(w *ecs.World, e ecs.Entity) reflect.Value
 	// Add attaches the type's zero-ish default to the entity.
 	Add func(w *ecs.World, e ecs.Entity)
+	// Value returns a copy of the live component (components are plain structs,
+	// so a value copy is a deep copy) — undo snapshots use this.
+	Value func(w *ecs.World, e ecs.Entity) any
+	// SetValue writes a captured value back, attaching the component first when
+	// absent. Values of the wrong dynamic type are ignored.
+	SetValue func(w *ecs.World, e ecs.Entity, val any)
 
 	Fields []Field
 }
@@ -79,6 +85,23 @@ func Register[T any](r *Registry, name, pkg string) {
 		Remove: func(w *ecs.World, e ecs.Entity) {
 			mp := generic.NewMap1[T](w)
 			mp.Remove(e)
+		},
+		Value: func(w *ecs.World, e ecs.Entity) any {
+			mp := generic.NewMap[T](w)
+			return *mp.Get(e)
+		},
+		SetValue: func(w *ecs.World, e ecs.Entity, val any) {
+			v, ok := val.(T)
+			if !ok {
+				return
+			}
+			mp := generic.NewMap[T](w)
+			if mp.Has(e) {
+				mp.Set(e, &v)
+				return
+			}
+			m1 := generic.NewMap1[T](w)
+			m1.Assign(e, &v)
 		},
 		Fields: walkFields(rt),
 	}
