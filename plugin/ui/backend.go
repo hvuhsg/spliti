@@ -324,6 +324,13 @@ func (b *Backend) render(c *app.Ctx, dd *imgui.DrawData) {
 	if len(b.vtxData) == 0 || len(b.idxData) == 0 {
 		return
 	}
+	// WriteBuffer requires the data size to be a multiple of 4. Vertices are
+	// 20-byte strided so they always comply; indices are 2 bytes each, so an
+	// odd index count must be padded or the whole upload is rejected — which
+	// silently freezes the GPU-side geometry at the last accepted frame.
+	if len(b.idxData)%4 != 0 {
+		b.idxData = append(b.idxData, 0, 0)
+	}
 	b.ensureBuffers(c, len(b.vtxData), len(b.idxData))
 	_ = queue.WriteBuffer(b.vbuf, 0, b.vtxData)
 	_ = queue.WriteBuffer(b.ibuf, 0, b.idxData)
@@ -363,8 +370,8 @@ func (b *Backend) render(c *app.Ctx, dd *imgui.DrawData) {
 			if te == nil {
 				continue
 			}
-			pass.SetScissorRect(uint32(x0), uint32(y0), uint32(x1-x0), uint32(y1-y0))
 			pass.SetBindGroup(1, te.bg, nil)
+			pass.SetScissorRect(uint32(x0), uint32(y0), uint32(x1-x0), uint32(y1-y0))
 			pass.DrawIndexed(
 				cmd.ElemCount(), 1,
 				spans[i].idxBase+cmd.IdxOffset(),

@@ -19,6 +19,7 @@ const (
 	frameLabel     = "__render3d_frame"
 	renderLabel    = "__render3d_render"
 	gizmoLabel     = "__render3d_gizmo"
+	sceneEndLabel  = "__render3d_scene_end"
 	overlayLabel   = "__render3d_overlay"
 	presentLabel   = "__render3d_present"
 )
@@ -59,9 +60,11 @@ func installSystems(a *app.App) {
 		app.System(writeFrameUniforms).Label(frameLabel).Before(renderLabel).After(transformLabel))
 	a.AddSystems(schedule.PostUpdate, app.System(renderSystem).Label(renderLabel))
 	a.AddSystems(schedule.PostUpdate,
-		app.System(drawGizmos).Label(gizmoLabel).After(renderLabel).Before(overlayLabel))
+		app.System(drawGizmos).Label(gizmoLabel).After(renderLabel).Before(sceneEndLabel))
 	a.AddSystems(schedule.PostUpdate,
-		app.System(drawOverlay2D).Label(overlayLabel).After(gizmoLabel).Before(presentLabel))
+		app.System(endScenePass).Label(sceneEndLabel).After(gizmoLabel).Before(overlayLabel))
+	a.AddSystems(schedule.PostUpdate,
+		app.System(drawOverlay2D).Label(overlayLabel).After(sceneEndLabel).Before(presentLabel))
 	a.AddSystems(schedule.PostUpdate,
 		app.System(presentSystem).Label(presentLabel).After(renderLabel))
 }
@@ -116,9 +119,11 @@ func writeFrameUniforms(c *app.Ctx) {
 	}
 }
 
-// renderSystem acquires the surface texture, opens a render pass with depth, and
-// records all mesh draws. It leaves the pass open so overlay systems (After
-// render, Before present) can append draws; presentSystem closes it.
+// renderSystem opens the scene render pass and records all mesh draws. With no
+// scene target set it draws straight into the window surface and leaves the
+// pass open for overlay systems; presentSystem closes it. With a scene target
+// (SetSceneTarget) it draws into the offscreen target instead, and endScenePass
+// later closes that pass and opens a second, surface pass for overlays.
 func renderSystem(c *app.Ctx) {
 	g := app.GetResource[GPU](c)
 	if g == nil {
@@ -126,24 +131,112 @@ func renderSystem(c *app.Ctx) {
 	}
 	g.frameActive = false
 
+	var (
+		tex  *wgpu.Texture
+		view *wgpu.TextureView
+	)
+	color := wgpu.RenderPassColorAttachment{
+		LoadOp:     wgpu.LoadOpClear,
+		StoreOp:    wgpu.StoreOpStore,
+		ClearValue: g.clearColor,
+	}
+	depth := wgpu.RenderPassDepthStencilAttachment{
+		DepthLoadOp:     wgpu.LoadOpClear,
+		DepthStoreOp:    wgpu.StoreOpStore,
+		DepthClearValue: 1.0,
+	}
+
+	if rt := g.target; rt != nil {
+		// Offscreen scene pass: the surface is acquired later, in endScenePass.
+		color.View = rt.colorView
+		if rt.msaaView != nil {
+			color.View = rt.msaaView
+			color.ResolveTarget = rt.colorView
+			color.StoreOp = wgpu.StoreOpDiscard
+		}
+		depth.View = rt.depthView
+	} else {
+		var err error
+		tex, err = g.surface.GetCurrentTexture()
+		if err != nil {
+			// Surface lost/outdated (often a resize mid-flight). Reconfigure and skip
+			// this frame; the next one recovers.
+			g.surface.Configure(g.adapter, g.device, g.config)
+			return
+		}
+		view, err = tex.CreateView(nil)
+		if err != nil {
+			tex.Release()
+			return
+		}
+		color.View = view
+		if g.msaaView != nil {
+			color.View = g.msaaView
+			color.ResolveTarget = view
+			color.StoreOp = wgpu.StoreOpDiscard
+		}
+		depth.View = g.depthView
+	}
+
+	encoder, err := g.device.CreateCommandEncoder(&wgpu.CommandEncoderDescriptor{
+		Label: "spliti.render3d.encoder",
+	})
+	if err != nil {
+		if view != nil {
+			view.Release()
+		}
+		if tex != nil {
+			tex.Release()
+		}
+		return
+	}
+
+	pass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
+		ColorAttachments:       []wgpu.RenderPassColorAttachment{color},
+		DepthStencilAttachment: &depth,
+	})
+
+	g.curTex, g.curView, g.curEncoder, g.curPass = tex, view, encoder, pass
+	g.frameActive = true
+
+	pass.SetPipeline(g.pipeline)
+	pass.SetBindGroup(0, g.frameBindGroup, nil)
+
+	drawMeshes(c, g, pass)
+}
+
+// endScenePass is a no-op without a scene target. With one, it closes the
+// offscreen scene pass (meshes + gizmos are inside the target by now), acquires
+// the window surface, and opens a second pass on it for the overlay systems
+// (ImGui, overlay2d) that run between here and present. Both passes record into
+// the same command encoder, so a target written in pass one is sampleable in
+// pass two within the same frame.
+func endScenePass(c *app.Ctx) {
+	g := app.GetResource[GPU](c)
+	if g == nil || !g.frameActive || g.target == nil {
+		return
+	}
+
+	g.curPass.End()
+	g.curPass.Release()
+	g.curPass = nil
+
 	tex, err := g.surface.GetCurrentTexture()
 	if err != nil {
-		// Surface lost/outdated (often a resize mid-flight). Reconfigure and skip
-		// this frame; the next one recovers.
+		// Surface lost: drop the whole frame (the scene pass is discarded with the
+		// unfinished encoder) and recover next frame.
 		g.surface.Configure(g.adapter, g.device, g.config)
+		g.curEncoder.Release()
+		g.curEncoder = nil
+		g.frameActive = false
 		return
 	}
 	view, err := tex.CreateView(nil)
 	if err != nil {
 		tex.Release()
-		return
-	}
-	encoder, err := g.device.CreateCommandEncoder(&wgpu.CommandEncoderDescriptor{
-		Label: "spliti.render3d.encoder",
-	})
-	if err != nil {
-		view.Release()
-		tex.Release()
+		g.curEncoder.Release()
+		g.curEncoder = nil
+		g.frameActive = false
 		return
 	}
 
@@ -158,24 +251,19 @@ func renderSystem(c *app.Ctx) {
 		color.ResolveTarget = view
 		color.StoreOp = wgpu.StoreOpDiscard
 	}
+	// Overlay pipelines declare the depth format, so the pass must attach depth
+	// even though overlays neither test nor write meaningfully against it.
 	depth := wgpu.RenderPassDepthStencilAttachment{
 		View:            g.depthView,
 		DepthLoadOp:     wgpu.LoadOpClear,
 		DepthStoreOp:    wgpu.StoreOpStore,
 		DepthClearValue: 1.0,
 	}
-	pass := encoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
+	pass := g.curEncoder.BeginRenderPass(&wgpu.RenderPassDescriptor{
 		ColorAttachments:       []wgpu.RenderPassColorAttachment{color},
 		DepthStencilAttachment: &depth,
 	})
-
-	g.curTex, g.curView, g.curEncoder, g.curPass = tex, view, encoder, pass
-	g.frameActive = true
-
-	pass.SetPipeline(g.pipeline)
-	pass.SetBindGroup(0, g.frameBindGroup, nil)
-
-	drawMeshes(c, g, pass)
+	g.curTex, g.curView, g.curPass = tex, view, pass
 }
 
 // drawMeshes collects MeshRenderer+GlobalTransform entities (optional
@@ -373,11 +461,13 @@ func presentSystem(c *app.Ctx) {
 }
 
 // AddOverlay registers a system that draws on top of the mesh render, after the
-// entity pass and before present. Overlay systems record draws into the open
-// render pass returned by Pass(c); they must not present.
+// scene pass and before present. Overlay systems record draws into the open
+// render pass returned by Pass(c); they must not present. When a scene target
+// is set (SetSceneTarget) the open pass at this point is the window-surface
+// pass, so overlays always land on screen, not in the offscreen target.
 func AddOverlay(a *app.App, sys app.SystemFunc) {
 	a.AddSystems(schedule.PostUpdate,
-		app.System(sys).After(renderLabel).Before(presentLabel))
+		app.System(sys).After(sceneEndLabel).Before(presentLabel))
 }
 
 // AddPreRender registers a system that runs before the mesh render in PostUpdate

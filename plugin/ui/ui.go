@@ -53,3 +53,40 @@ func RegisterTexture(c *app.Ctx, view *wgpu.TextureView) imgui.TextureID {
 	b.textures[id] = &texEntry{bg: bg}
 	return id
 }
+
+// UpdateTexture points an id from RegisterTexture at a new view, keeping the id
+// stable across the caller recreating its texture (e.g. an editor viewport
+// resizing its render target). No-op for unknown ids.
+func UpdateTexture(c *app.Ctx, id imgui.TextureID, view *wgpu.TextureView) {
+	b := app.GetResource[Backend](c)
+	if b == nil || view == nil {
+		return
+	}
+	te := b.textures[id]
+	if te == nil || te.tex != nil { // only user textures, never ImGui-managed ones
+		return
+	}
+	bg, err := b.bgl1Group(c, view)
+	if err != nil {
+		return
+	}
+	if te.bg != nil {
+		te.bg.Release()
+	}
+	te.bg = bg
+}
+
+// UnregisterTexture releases an id from RegisterTexture. The caller-owned view
+// itself is not touched. No-op for unknown or ImGui-managed ids.
+func UnregisterTexture(c *app.Ctx, id imgui.TextureID) {
+	b := app.GetResource[Backend](c)
+	if b == nil {
+		return
+	}
+	te := b.textures[id]
+	if te == nil || te.tex != nil {
+		return
+	}
+	te.release()
+	delete(b.textures, id)
+}

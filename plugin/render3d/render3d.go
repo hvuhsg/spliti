@@ -182,6 +182,11 @@ type GPU struct {
 	// back and handed to it. Set via CaptureFrame and cleared by presentSystem once
 	// the frame is delivered.
 	captureSink FrameSink
+
+	// target, when non-nil, redirects the scene pass (meshes + gizmos) into an
+	// offscreen RenderTarget; overlays still draw to the surface in a second
+	// pass. Set via SetSceneTarget; the caller owns the target's lifetime.
+	target *RenderTarget
 }
 
 // sizeDefaults returns the plugin's window size and title with zero values
