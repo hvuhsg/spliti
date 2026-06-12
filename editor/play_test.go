@@ -169,18 +169,26 @@ func TestPlayEditsAreLiveOnly(t *testing.T) {
 func TestSessionRoundTrip(t *testing.T) {
 	c, st := newCmdEditor(t)
 	e, _ := entityByInstance(c, "crate1")
-	st.selected, st.hasSelected = e, true
+	g, _ := entityByInstance(c, "ground")
+	st.selectOne(g)
+	st.toggleSelect(e) // ground + crate1, crate1 primary
 	st.cam.pivot = m.Vec3{X: 1, Y: 2, Z: 3}
 	st.cam.dist, st.cam.yaw, st.cam.pitch = 7, 0.25, -0.5
 
 	st.saveSession(c)
 
-	st.hasSelected = false
+	st.clearSelection()
 	st.cam = defaultRig()
 	st.restoreSession(c)
 
-	if !st.hasSelected || instanceName(c, st.selected) != "crate1" {
-		t.Fatal("selection not restored")
+	if len(st.sel) != 2 {
+		t.Fatalf("selection not restored: %v", st.sel)
+	}
+	if prim, ok := st.primary(); !ok || instanceName(c, prim) != "crate1" {
+		t.Fatal("primary selection not restored")
+	}
+	if !st.isSelected(g) {
+		t.Fatal("multi-selection member not restored")
 	}
 	if st.cam.pivot != (m.Vec3{X: 1, Y: 2, Z: 3}) || st.cam.dist != 7 || st.cam.yaw != 0.25 || st.cam.pitch != -0.5 {
 		t.Fatalf("camera not restored: %+v", st.cam)

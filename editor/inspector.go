@@ -25,16 +25,19 @@ func drawInspector(c *app.Ctx, st *state) {
 	imgui.Begin("Inspector")
 	defer imgui.End()
 
-	if !st.hasSelected || !c.World().Alive(st.selected) {
+	e, ok := st.primary()
+	if !ok || !c.World().Alive(e) {
 		imgui.TextDisabled("nothing selected")
 		return
 	}
-	e := st.selected
 	inst := instanceName(c, e)
 	if inst != "" {
 		imgui.TextUnformatted(inst)
 	} else {
 		imgui.TextDisabled("(unnamed entity - edits are live-only)")
+	}
+	if n := len(st.sel); n > 1 {
+		imgui.TextDisabled(fmt.Sprintf("%d selected - editing the primary", n))
 	}
 	imgui.Separator()
 

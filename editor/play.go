@@ -115,15 +115,21 @@ func (st *state) stopPlay(c *app.Ctx) {
 	if st.mode == modeEdit || st.snapshot == nil {
 		return
 	}
-	selected := instanceName(c, st.selected) // survives the despawn by name
+	// The selection survives the despawn by instance name.
+	var selected []string
+	for _, e := range st.sel {
+		if n := instanceName(c, e); n != "" {
+			selected = append(selected, n)
+		}
+	}
 	st.snapshot.restore(c)
 	st.snapshot = nil
 	st.mode = modeEdit
 	st.stepPending, st.stepActive = false, false
-	st.hasSelected = false
-	if selected != "" {
-		if e, ok := entityByInstance(c, selected); ok {
-			st.selected, st.hasSelected = e, true
+	st.clearSelection()
+	for _, name := range selected {
+		if e, ok := entityByInstance(c, name); ok {
+			st.sel = append(st.sel, e)
 		}
 	}
 	st.logf(logInfo, "play stopped: world restored")

@@ -7,44 +7,48 @@ import (
 	"github.com/mlange-42/arche/generic"
 )
 
-// drawSelectionBox outlines the selected entity's mesh AABB (in its local
-// space, transformed by the world matrix) in the scene's line pass.
+// drawSelectionBox outlines each selected entity's mesh AABB (in its local
+// space, transformed by the world matrix) in the scene's line pass. The
+// primary selection gets the brighter box.
 func drawSelectionBox(c *app.Ctx, st *state) {
-	if !st.hasSelected || !c.World().Alive(st.selected) {
-		return
-	}
 	w := c.World()
+	prim, _ := st.primary()
 	mrMap := generic.NewMap[render3d.MeshRenderer](w)
 	gtMap := generic.NewMap[render3d.GlobalTransform](w)
-	if !mrMap.Has(st.selected) || !gtMap.Has(st.selected) {
-		return
-	}
-	lo, hi, ok := st.meshBounds(c, mrMap.Get(st.selected).Mesh)
-	if !ok {
-		return
-	}
-	model := gtMap.Get(st.selected).Matrix
-	corners := [8]m.Vec3{}
-	for i := range corners {
-		p := m.Vec3{X: lo.X, Y: lo.Y, Z: lo.Z}
-		if i&1 != 0 {
-			p.X = hi.X
+	for _, sel := range st.sel {
+		if !w.Alive(sel) || !mrMap.Has(sel) || !gtMap.Has(sel) {
+			continue
 		}
-		if i&2 != 0 {
-			p.Y = hi.Y
+		lo, hi, ok := st.meshBounds(c, mrMap.Get(sel).Mesh)
+		if !ok {
+			continue
 		}
-		if i&4 != 0 {
-			p.Z = hi.Z
+		model := gtMap.Get(sel).Matrix
+		corners := [8]m.Vec3{}
+		for i := range corners {
+			p := m.Vec3{X: lo.X, Y: lo.Y, Z: lo.Z}
+			if i&1 != 0 {
+				p.X = hi.X
+			}
+			if i&2 != 0 {
+				p.Y = hi.Y
+			}
+			if i&4 != 0 {
+				p.Z = hi.Z
+			}
+			corners[i] = model.MulVec4(m.Vec4{X: p.X, Y: p.Y, Z: p.Z, W: 1}).XYZ()
 		}
-		corners[i] = model.MulVec4(m.Vec4{X: p.X, Y: p.Y, Z: p.Z, W: 1}).XYZ()
-	}
-	col := m.Vec4{X: 1, Y: 0.62, Z: 0.1, W: 0.95}
-	for _, e := range [12][2]int{
-		{0, 1}, {2, 3}, {4, 5}, {6, 7}, // X edges
-		{0, 2}, {1, 3}, {4, 6}, {5, 7}, // Y edges
-		{0, 4}, {1, 5}, {2, 6}, {3, 7}, // Z edges
-	} {
-		render3d.Line(c, corners[e[0]], corners[e[1]], col)
+		col := m.Vec4{X: 1, Y: 0.62, Z: 0.1, W: 0.95}
+		if sel != prim {
+			col = m.Vec4{X: 0.95, Y: 0.55, Z: 0.1, W: 0.55}
+		}
+		for _, e := range [12][2]int{
+			{0, 1}, {2, 3}, {4, 5}, {6, 7}, // X edges
+			{0, 2}, {1, 3}, {4, 6}, {5, 7}, // Y edges
+			{0, 4}, {1, 5}, {2, 6}, {3, 7}, // Z edges
+		} {
+			render3d.Line(c, corners[e[0]], corners[e[1]], col)
+		}
 	}
 }
 

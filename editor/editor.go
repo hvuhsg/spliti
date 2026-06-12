@@ -74,9 +74,11 @@ type state struct {
 	dockBuilt bool
 	vpHovered bool
 
-	// selection
-	selected    ecs.Entity
-	hasSelected bool
+	// selection: ordered, last entry is the primary (inspector/gizmo anchor)
+	sel []ecs.Entity
+	// dragStart captures each selected entity's local transform when a gizmo
+	// drag begins, for the one-batch undo pushed at drag end.
+	dragStart map[ecs.Entity]render3d.Transform3D
 
 	// gizmo
 	op gizmo.Op
@@ -150,6 +152,7 @@ func newState(p Plugin) *state {
 		cam:               defaultRig(),
 		undo:              undo.NewStack(0),
 		dirty:             make(map[string]time.Time),
+		dragStart:         make(map[ecs.Entity]render3d.Transform3D),
 		eulerCache:        make(map[string][3]float32),
 		editBefore:        make(map[string]any),
 		aabbMeshCache:     make(map[string][2]m.Vec3),
@@ -258,8 +261,8 @@ func installSmokeHooks(a *app.App, st *state) {
 			fmt.Fprintf(os.Stderr, "smoke: editor up (pid %d)\n", os.Getpid())
 		case 60:
 			app.Query1[scene.Name](c, func(e ecs.Entity, n *scene.Name) {
-				if !st.hasSelected {
-					st.selected, st.hasSelected = e, true
+				if len(st.sel) == 0 {
+					st.selectOne(e)
 				}
 			})
 		case 70:
@@ -284,6 +287,7 @@ func installSmokeHooks(a *app.App, st *state) {
 // editorUI is the per-frame ImGui pass: dock shell, panels, shortcuts.
 func editorUI(c *app.Ctx) {
 	st := app.GetResource[state](c)
+	st.pruneSelection(c)
 	st.handleShortcuts(c)
 	drawShell(c, st)
 	drawHierarchy(c, st)
@@ -362,32 +366,61 @@ func (st *state) redo(c *app.Ctx) {
 }
 
 func (st *state) duplicateSelection(c *app.Ctx) {
-	if !st.hasSelected {
+	var cmds []editorCmd
+	var names []string
+	for _, e := range st.sel {
+		src := instanceName(c, e)
+		if src == "" {
+			continue
+		}
+		name := st.freeInstanceName(c, src)
+		cmds = append(cmds, &cmdDuplicate{src: src, instance: name})
+		names = append(names, name)
+	}
+	if len(cmds) == 0 {
+		if len(st.sel) > 0 {
+			st.status("cannot duplicate unnamed entities")
+		}
 		return
 	}
-	src := instanceName(c, st.selected)
-	if src == "" {
-		st.status("cannot duplicate an unnamed entity")
-		return
-	}
-	cmd := &cmdDuplicate{src: src, instance: st.freeInstanceName(c, src)}
-	st.push(c, cmd)
-	if e, ok := entityByInstance(c, cmd.instance); ok {
-		st.selected, st.hasSelected = e, true
+	st.push(c, batch("duplicate", cmds))
+	st.clearSelection()
+	for _, name := range names {
+		if e, ok := entityByInstance(c, name); ok {
+			st.sel = append(st.sel, e)
+		}
 	}
 }
 
 func (st *state) deleteSelection(c *app.Ctx) {
-	if !st.hasSelected {
+	if len(st.sel) == 0 {
 		return
 	}
-	inst := instanceName(c, st.selected)
-	if inst == "" {
-		despawnSubtree(c, st.selected)
-		st.hasSelected = false
-		return
+	// Skip entities whose selected ancestor already takes them along, so the
+	// batch never deletes the same subtree twice.
+	var cmds []editorCmd
+	for _, e := range st.sel {
+		covered := false
+		for _, other := range st.sel {
+			if other != e && isDescendant(c, e, other) {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			continue
+		}
+		inst := instanceName(c, e)
+		if inst == "" {
+			despawnSubtree(c, e)
+			continue
+		}
+		cmds = append(cmds, &cmdDelete{root: inst})
 	}
-	st.push(c, &cmdDelete{root: inst})
+	st.clearSelection()
+	if len(cmds) > 0 {
+		st.push(c, batch("delete", cmds))
+	}
 }
 
 // freeInstanceName derives an unused instance name from a base name.

@@ -21,13 +21,55 @@ import (
 // (parse error) the source half is skipped — edits stay live-only, as the
 // status line warns.
 
-// push executes a command through the undo stack and surfaces failures in the
-// status line.
-func (st *state) push(c *app.Ctx, cmd interface {
+// editorCmd is the undoable-mutation interface every command here implements.
+type editorCmd interface {
 	Name() string
 	Do(c *app.Ctx) error
 	Undo(c *app.Ctx) error
-}) {
+}
+
+// cmdBatch groups commands into one undo step (multi-selection operations).
+type cmdBatch struct {
+	name string
+	cmds []editorCmd
+}
+
+// batch wraps cmds into a single undo step; a singleton batch collapses to
+// the command itself.
+func batch(name string, cmds []editorCmd) editorCmd {
+	if len(cmds) == 1 {
+		return cmds[0]
+	}
+	return &cmdBatch{name: fmt.Sprintf("%s %d entities", name, len(cmds)), cmds: cmds}
+}
+
+func (cmd *cmdBatch) Name() string { return cmd.name }
+
+func (cmd *cmdBatch) Do(c *app.Ctx) error {
+	for i, sub := range cmd.cmds {
+		if err := sub.Do(c); err != nil {
+			for j := i - 1; j >= 0; j-- {
+				cmd.cmds[j].Undo(c)
+			}
+			return fmt.Errorf("%s: %w", sub.Name(), err)
+		}
+	}
+	return nil
+}
+
+func (cmd *cmdBatch) Undo(c *app.Ctx) error {
+	var firstErr error
+	for i := len(cmd.cmds) - 1; i >= 0; i-- {
+		if err := cmd.cmds[i].Undo(c); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("%s: %w", cmd.cmds[i].Name(), err)
+		}
+	}
+	return firstErr
+}
+
+// push executes a command through the undo stack and surfaces failures in the
+// status line.
+func (st *state) push(c *app.Ctx, cmd editorCmd) {
 	// In Play mode edits are live-only and ephemeral (Stop restores the
 	// snapshot), so they bypass the undo stack — an entry would be stale the
 	// moment the world reverts.
@@ -711,11 +753,4 @@ func depthUnder(c *app.Ctx, e, root ecs.Entity) (int, bool) {
 func isDescendant(c *app.Ctx, e, root ecs.Entity) bool {
 	_, ok := depthUnder(c, e, root)
 	return ok
-}
-
-// deselectIf clears the selection when it points at (a descendant of) e.
-func (st *state) deselectIf(e ecs.Entity) {
-	if st.hasSelected && st.selected == e {
-		st.hasSelected = false
-	}
 }
