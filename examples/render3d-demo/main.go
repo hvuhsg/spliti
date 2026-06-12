@@ -102,8 +102,7 @@ func setup(c *app.Ctx) {
 		Spinner{Axis: m.Vec3{Y: 1}, Speed: 0.6})
 
 	// Sun.
-	render3d.SpawnDirectionalLight(cmd, render3d.DirectionalLight{
-		Direction: m.Vec3{X: -0.4, Y: -1, Z: -0.3},
+	render3d.SpawnDirectionalLight(cmd, render3d.XForm().Facing(m.Vec3{X: -0.4, Y: -1, Z: -0.3}), render3d.DirectionalLight{
 		Color:     m.Vec3{X: 1, Y: 0.98, Z: 0.92},
 		Intensity: 3.0,
 	})

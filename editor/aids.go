@@ -88,7 +88,9 @@ func drawLightIcons(c *app.Ctx, st *state) {
 		p := m.Vec3{X: mat[12], Y: mat[13], Z: mat[14]}
 		col := lightColor(dl.Color)
 		star(p, lightIconRadius*0.7, col)
-		dir := dl.Direction.Normalize()
+		// The cast direction is the entity's forward (-Z) axis, so the arrow
+		// follows the gizmo's rotation.
+		dir := render3d.Forward(mat)
 		if dir != (m.Vec3{}) {
 			render3d.Line(c, p, p.Add(dir.Scale(lightIconRadius*4)), col)
 		}

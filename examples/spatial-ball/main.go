@@ -107,8 +107,7 @@ func setup(c *app.Ctx) {
 		render3d.SpawnMesh(c.Commands(), render3d.NewTransform3D(pos), "marker", "marker")
 	}
 
-	render3d.SpawnDirectionalLight(c.Commands(), render3d.DirectionalLight{
-		Direction: m.Vec3{X: -0.4, Y: -1, Z: -0.3}.Normalize(),
+	render3d.SpawnDirectionalLight(c.Commands(), render3d.XForm().Facing(m.Vec3{X: -0.4, Y: -1, Z: -0.3}), render3d.DirectionalLight{
 		Color:     m.Vec3{X: 1, Y: 0.98, Z: 0.95},
 		Intensity: 2.2,
 	})

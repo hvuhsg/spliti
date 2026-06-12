@@ -93,13 +93,16 @@ func writeFrameUniforms(c *app.Ctx) {
 	g.frameUBO[36], g.frameUBO[37], g.frameUBO[38], g.frameUBO[39] =
 		g.ambient.X, g.ambient.Y, g.ambient.Z, 0
 
-	// Directional light: last one queried wins (the renderer supports one).
+	// Directional light: last one queried wins (the renderer supports one). Its
+	// cast direction is the entity's forward (-Z) world axis, so rotating the
+	// light aims it. Runs after transform propagation, so the matrix is current.
 	var dir DirectionalLight
-	app.Query1[DirectionalLight](c, func(_ ecs.Entity, d *DirectionalLight) {
-		dir = *d
+	var dirVec m.Vec3
+	app.Query2[DirectionalLight, GlobalTransform](c, func(_ ecs.Entity, d *DirectionalLight, gt *GlobalTransform) {
+		dir, dirVec = *d, Forward(gt.Matrix)
 	})
 	g.frameUBO[40], g.frameUBO[41], g.frameUBO[42], g.frameUBO[43] =
-		dir.Direction.X, dir.Direction.Y, dir.Direction.Z, dir.Intensity
+		dirVec.X, dirVec.Y, dirVec.Z, dir.Intensity
 	g.frameUBO[44], g.frameUBO[45], g.frameUBO[46], g.frameUBO[47] =
 		dir.Color.X, dir.Color.Y, dir.Color.Z, 0
 

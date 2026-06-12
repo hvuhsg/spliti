@@ -1,6 +1,8 @@
 package render3d
 
 import (
+	"math"
+
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	"github.com/mlange-42/arche/ecs"
 )
@@ -65,6 +67,36 @@ func (t Transform3D) Rot(x, y, z, w float32) Transform3D {
 	return t
 }
 
+// Facing returns a copy of t rotated so its forward (-Z) axis points along dir
+// — the direction a directional light casts, or a model's "forward". dir need
+// not be unit; a zero dir leaves the rotation unchanged. Roll is left at the
+// shortest-arc minimum, which is all a direction needs. This is a code-side
+// authoring convenience and is NOT part of the editor's transform grammar — the
+// editor stores rotations as EulerDeg/Rot and edits them with the gizmo.
+func (t Transform3D) Facing(dir m.Vec3) Transform3D {
+	d := dir.Normalize()
+	if d == (m.Vec3{}) {
+		return t
+	}
+	fwd := m.Vec3{Z: -1}
+	dot := fwd.Dot(d)
+	switch {
+	case dot > 0.999999: // already aligned with -Z
+		t.Rotation = m.IdentityQuat()
+	case dot < -0.999999: // antiparallel: 180° about an arbitrary perpendicular
+		t.Rotation = m.FromAxisAngle(m.Vec3{Y: 1}, math.Pi)
+	default:
+		t.Rotation = m.FromAxisAngle(fwd.Cross(d), float32(math.Acos(float64(dot))))
+	}
+	return t
+}
+
+// Forward returns the world-space forward (-Z) axis of a transform matrix,
+// normalized: the direction a camera looks or a directional light casts.
+func Forward(mat m.Mat4) m.Vec3 {
+	return m.Vec3{X: -mat[8], Y: -mat[9], Z: -mat[10]}.Normalize()
+}
+
 // matrix builds the local TRS matrix, defending against zero-valued rotation
 // and scale so a partially-initialized Transform3D still renders sensibly.
 func (t Transform3D) matrix() m.Mat4 {
@@ -126,10 +158,11 @@ func (c InstanceColor) orWhite() m.Vec4 {
 type Transparent struct{}
 
 // DirectionalLight is an infinitely-distant light (like the sun): all rays are
-// parallel along Direction. Color is linear RGB and Intensity scales it. The
+// parallel. The direction it casts is the forward (-Z) axis of the entity's
+// GlobalTransform, so rotating the entity (gizmo, animation, or a Facing
+// transform) aims the light. Color is linear RGB and Intensity scales it. The
 // renderer uses a single directional light (the last one queried wins).
 type DirectionalLight struct {
-	Direction m.Vec3
 	Color     m.Vec3
 	Intensity float32
 }

@@ -9,9 +9,15 @@ User-reported issues and requests (2026-06-13), plus previously deferred follow-
    (Today the game camera is a global `Camera3D` resource, not an entity — this likely needs a
    camera *component* or editor affordance for posing the resource, plus an icon billboard like
    the light icons and picking for it.)
-2. **Light direction should follow transform** — moving/rotating a light entity in the viewport
-   should update its direction, not just its position. (Directional/spot direction is currently
-   a separate field; it should derive from the entity's rotation, or the gizmo should write it.)
+2. **Light direction should follow transform** — ~~moving/rotating a light entity in the viewport
+   should update its direction, not just its position.~~ **Done.** Removed `DirectionalLight.Direction`
+   entirely: a directional light now casts along its transform's forward (`-Z`) world axis, computed
+   each frame from `GlobalTransform` (`render3d.Forward`). Direction is no longer a separate field, so
+   rotating the light with the gizmo just works and persists through the normal `cmdTransform` (the
+   icon arrow follows live). `SpawnDirectionalLight`/`NewDirectionalLight` now take a `Transform3D`;
+   added `Transform3D.Facing(dir)` (shortest-arc aim from `-Z`) for code-side authoring, and migrated
+   the scaffold sun (`EulerDeg(-60, 30, 0)`, gizmo-editable) and all examples. Renderer reads the
+   light's `Forward` instead of a stored vector.
 3. **Fly navigation** — ~~no way to move *through* the scene, only orbit/pan.~~ **Done.** The
    fly code (RMB + WASD, Shift to boost, Q/E vertical) was present but dead: it gated on
    `WantCaptureKeyboard`, which `NavEnableKeyboard` forces true whenever the viewport is focused.

@@ -109,11 +109,21 @@ func SpawnPointLight(c *app.Commands, t Transform3D, light PointLight) {
 	})
 }
 
-// SpawnDirectionalLight queues a directional (sun-like) light. It has no
-// position, only a direction, so it needs no transform.
-func SpawnDirectionalLight(c *app.Commands, light DirectionalLight) {
+// SpawnDirectionalLight queues a directional (sun-like) light. Position is
+// irrelevant, but the transform's rotation aims it: the light casts along the
+// forward (-Z) axis, so build t with EulerDeg or Facing. Animating the
+// transform turns the light.
+func SpawnDirectionalLight(c *app.Commands, t Transform3D, light DirectionalLight) {
 	c.Add(func(w *ecs.World) {
-		mp := generic.NewMap1[DirectionalLight](w)
-		mp.NewWith(&light)
+		mp := generic.NewMap3[Transform3D, GlobalTransform, DirectionalLight](w)
+		mp.NewWith(&t, &GlobalTransform{Matrix: m.Identity4()}, &light)
 	})
+}
+
+// NewDirectionalLight creates a directional-light entity immediately and returns
+// it — the prefab-friendly counterpart of SpawnDirectionalLight. The light casts
+// along the transform's forward (-Z) axis.
+func NewDirectionalLight(c *app.Ctx, t Transform3D, light DirectionalLight) ecs.Entity {
+	mp := generic.NewMap3[Transform3D, GlobalTransform, DirectionalLight](c.World())
+	return mp.NewWith(&t, &GlobalTransform{Matrix: m.Identity4()}, &light)
 }

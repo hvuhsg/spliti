@@ -73,8 +73,7 @@ func setup(c *app.Ctx) {
 	spawnTx(cmd, m.Vec3{X: -30, Y: markerHeight, Z: 0}, lab, false)
 	spawnRx(cmd, m.Vec3{X: 30, Y: markerHeight, Z: 0}, lab, false)
 
-	render3d.SpawnDirectionalLight(cmd, render3d.DirectionalLight{
-		Direction: m.Vec3{X: -0.3, Y: -1, Z: -0.25},
+	render3d.SpawnDirectionalLight(cmd, render3d.XForm().Facing(m.Vec3{X: -0.3, Y: -1, Z: -0.25}), render3d.DirectionalLight{
 		Color:     m.Vec3{X: 1, Y: 0.97, Z: 0.9},
 		Intensity: 2.6,
 	})

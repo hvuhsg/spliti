@@ -306,12 +306,15 @@ import (
 	"github.com/mlange-42/arche/generic"
 )
 
+// SpawnSun makes a directional (sun) light. The light casts along the
+// transform's forward (-Z) axis, so the scene's XForm().EulerDeg(...) aims it —
+// rotate it with the editor gizmo to change the time of day.
+//
 //spliti:entity
 func SpawnSun(c *app.Ctx, t render3d.Transform3D) ecs.Entity {
 	mp := generic.NewMap3[render3d.Transform3D, render3d.GlobalTransform, render3d.DirectionalLight](c.World())
 	return mp.NewWith(&t, &render3d.GlobalTransform{Matrix: m.Identity4()},
 		&render3d.DirectionalLight{
-			Direction: m.Vec3{X: -0.4, Y: -1, Z: -0.3},
 			Color:     m.Vec3{X: 1, Y: 0.98, Z: 0.92},
 			Intensity: 3,
 		})
@@ -333,7 +336,7 @@ import (
 //spliti:scene Main
 func Main(c *app.Ctx) {
 	_ = scene.Spawn(c, "ground", entities.SpawnGround(c, render3d.XForm()))
-	_ = scene.Spawn(c, "sun", entities.SpawnSun(c, render3d.XForm()))
+	_ = scene.Spawn(c, "sun", entities.SpawnSun(c, render3d.XForm().EulerDeg(-60, 30, 0)))
 	_ = scene.Spawn(c, "crate1", entities.SpawnCrate(c, render3d.XForm().At(-1.4, 0.5, 0)))
 	_ = scene.Spawn(c, "sphere1", entities.SpawnSphere(c, render3d.XForm().At(1.4, 0.6, 0)))
 }
