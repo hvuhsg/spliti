@@ -56,7 +56,7 @@ func drawViewport(c *app.Ctx, st *state) {
 
 	// Prefab drop from the Assets panel: spawn where the drop ray lands.
 	if imgui.BeginDragDropTarget() {
-		if imgui.AcceptDragDropPayload(prefabDragType) != nil && st.dragPrefab != "" {
+		if payloadDelivered(imgui.AcceptDragDropPayload(prefabDragType)) && st.dragPrefab != "" {
 			mp := imgui.MousePos()
 			origin, dir := cam.ScreenToRay(float64(mp.X-imageMin.X), float64(mp.Y-imageMin.Y), w, h)
 			st.spawnPrefab(c, st.dragPrefab, dropPoint(c, origin, dir))

@@ -76,7 +76,7 @@ func drawHierarchy(c *app.Ctx, st *state) {
 			imgui.EndDragDropSource()
 		}
 		if imgui.BeginDragDropTarget() {
-			if imgui.AcceptDragDropPayload(hierarchyDragType) != nil && st.dragInstance != "" {
+			if payloadDelivered(imgui.AcceptDragDropPayload(hierarchyDragType)) && st.dragInstance != "" {
 				st.reparent(c, st.dragInstance, nd.name)
 				st.dragInstance = ""
 			}
@@ -108,7 +108,7 @@ func drawHierarchy(c *app.Ctx, st *state) {
 	}
 	imgui.InvisibleButton("##rootdrop", avail)
 	if imgui.BeginDragDropTarget() {
-		if imgui.AcceptDragDropPayload(hierarchyDragType) != nil && st.dragInstance != "" {
+		if payloadDelivered(imgui.AcceptDragDropPayload(hierarchyDragType)) && st.dragInstance != "" {
 			st.reparent(c, st.dragInstance, "")
 			st.dragInstance = ""
 		}
@@ -226,3 +226,12 @@ func (st *state) reparent(c *app.Ctx, instance, newParent string) {
 var payloadByte byte
 
 func dummyPayload() uintptr { return uintptr(unsafe.Pointer(&payloadByte)) }
+
+// payloadDelivered reports an actual drop. cimgui-go's AcceptDragDropPayload
+// wraps even a NULL C payload in a non-nil Go struct, so a plain `!= nil`
+// check fires on every hovered frame of the drag; the C pointer (CData) is
+// only set on delivery (mouse release). Calling Payload methods on the NULL
+// wrapper would pass NULL into C — inspect the field directly.
+func payloadDelivered(p *imgui.Payload) bool {
+	return p != nil && p.CData != nil
+}
