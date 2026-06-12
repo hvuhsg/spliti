@@ -166,8 +166,10 @@ func (f *SceneFile) Bytes() ([]byte, error) {
 // Save prints the file, verifies the output re-parses to a model that still
 // contains every scene, and atomically replaces Path. The editor must never
 // write a scene file it cannot read back; any failure leaves the file on disk
-// untouched.
+// untouched. Imports left orphaned by removed scene lines are pruned first —
+// an unused import would make the saved file uncompilable.
 func (f *SceneFile) Save() error {
+	pruneUnusedImports(f.file)
 	out, err := f.Bytes()
 	if err != nil {
 		return fmt.Errorf("srcmodel: print %s: %w", f.Path, err)

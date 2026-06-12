@@ -238,6 +238,61 @@ func literalExpr(e dst.Expr) bool {
 	return false
 }
 
+// pruneUnusedImports drops import specs whose package qualifier is no longer
+// mentioned anywhere in the file — the inverse of ensureImport, run on Save so
+// removing the last scene.Set line that needed an import cannot leave the file
+// uncompilable (unused imports are a Go compile error). Blank/dot imports and
+// paths whose final element is not a valid identifier (the qualifier cannot be
+// derived syntactically) are always kept.
+func pruneUnusedImports(f *dst.File) {
+	used := map[string]bool{}
+	for _, decl := range f.Decls {
+		if gd, ok := decl.(*dst.GenDecl); ok && gd.Tok == token.IMPORT {
+			continue
+		}
+		dst.Inspect(decl, func(n dst.Node) bool {
+			if id, ok := n.(*dst.Ident); ok {
+				used[id.Name] = true
+			}
+			return true
+		})
+	}
+	var decls []dst.Decl
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*dst.GenDecl)
+		if !ok || gd.Tok != token.IMPORT {
+			decls = append(decls, decl)
+			continue
+		}
+		var specs []dst.Spec
+		for _, spec := range gd.Specs {
+			is, ok := spec.(*dst.ImportSpec)
+			if !ok {
+				specs = append(specs, spec)
+				continue
+			}
+			qual := ""
+			if is.Name != nil {
+				if is.Name.Name == "_" || is.Name.Name == "." {
+					specs = append(specs, spec) // side-effect/dot import: keep
+					continue
+				}
+				qual = is.Name.Name
+			} else if p, err := strconv.Unquote(is.Path.Value); err == nil {
+				qual = path.Base(p)
+			}
+			if !validIdent(qual) || used[qual] {
+				specs = append(specs, spec)
+			}
+		}
+		if len(specs) > 0 {
+			gd.Specs = specs
+			decls = append(decls, gd)
+		}
+	}
+	f.Decls = decls
+}
+
 // ensureImport adds the import path to the file when missing. Imports are
 // referenced by their canonical (last path element) qualifier, matching how
 // scene files import engine packages.

@@ -102,8 +102,12 @@ func (t *Transform) Value() render3d.Transform3D {
 // .At when translated, .EulerDeg in degrees when the rotation survives a round
 // trip through Euler angles (rounded to 0.001°), .Rot otherwise, .Scaled when
 // scaled. The zero/default parts of the transform emit no chain call at all.
+// Translation and scale are rounded to 0.001 — gizmo drags otherwise leave
+// float32 noise like -5.53e-08 in source, and a scene file is for humans too.
 func FromTransform3D(v render3d.Transform3D) Transform {
 	t := Transform{Editable: true}
+	v.Translation = m.Vec3{X: roundMilli(v.Translation.X), Y: roundMilli(v.Translation.Y), Z: roundMilli(v.Translation.Z)}
+	v.Scale = m.Vec3{X: roundMilli(v.Scale.X), Y: roundMilli(v.Scale.Y), Z: roundMilli(v.Scale.Z)}
 	if v.Translation != (m.Vec3{}) {
 		t.At = &[3]float32{v.Translation.X, v.Translation.Y, v.Translation.Z}
 	}

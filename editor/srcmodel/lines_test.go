@@ -1,9 +1,14 @@
 package srcmodel
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/hvuhsg/spliti/plugin/render3d"
+	"github.com/hvuhsg/spliti/plugin/render3d/m"
 )
 
 // mirrors the fixture's components.Health for encode/decode tests
@@ -303,6 +308,74 @@ func TestRemoveSpawnDeletesChildParentLines(t *testing.T) {
 	}
 	if len(rem.stmts) != 3 {
 		t.Fatalf("captured %d stmts, want 3", len(rem.stmts))
+	}
+}
+
+func TestSaveRemovesOrphanedImports(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(path, []byte(sceneSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := ParseSceneFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := f.Scene("Main")
+
+	// A nested-struct override pulls in the srcmodel import...
+	v := reflect.ValueOf(testNested{Offset: testVec{X: 1}})
+	if err := s.SetComponentValue("crate1", "components.Boost", v); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Save(); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := os.ReadFile(path)
+	if !strings.Contains(string(out), `"github.com/hvuhsg/spliti/editor/srcmodel"`) {
+		t.Fatalf("import not added:\n%s", out)
+	}
+
+	// ...and removing the line must take the now-unused import with it.
+	if _, err := s.RemoveSet("crate1", "components.Boost"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Save(); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = os.ReadFile(path)
+	if strings.Contains(string(out), `"github.com/hvuhsg/spliti/editor/srcmodel"`) {
+		t.Fatalf("orphaned import survived save:\n%s", out)
+	}
+	// Imports that are still used must survive.
+	for _, keep := range []string{`"demo/game/entities"`, `"github.com/hvuhsg/spliti/scene"`, `"github.com/hvuhsg/spliti/plugin/render3d"`} {
+		if !strings.Contains(string(out), keep) {
+			t.Fatalf("live import %s pruned:\n%s", keep, out)
+		}
+	}
+}
+
+func TestFromTransform3DRoundsFloatNoise(t *testing.T) {
+	v := render3d.Transform3D{
+		Translation: m.Vec3{X: -5.5311716e-08, Y: 0.056345563, Z: 5.152288},
+		Rotation:    m.IdentityQuat(),
+		Scale:       m.Vec3{X: 2.1975043, Y: 1, Z: 1},
+	}
+	tr := FromTransform3D(v)
+	if *tr.At != [3]float32{0, 0.056, 5.152} {
+		t.Fatalf("At = %v", *tr.At)
+	}
+	if *tr.Scaled != [3]float32{2.198, 1, 1} {
+		t.Fatalf("Scaled = %v", *tr.Scaled)
+	}
+	// Noise-only translation rounds to zero and emits no call at all.
+	v2 := render3d.Transform3D{
+		Translation: m.Vec3{X: 1e-9, Y: -3e-8},
+		Rotation:    m.IdentityQuat(),
+		Scale:       m.Vec3{X: 1, Y: 1, Z: 1},
+	}
+	if tr2 := FromTransform3D(v2); tr2.At != nil || tr2.Scaled != nil {
+		t.Fatalf("noise emitted calls: %+v", tr2)
 	}
 }
 
