@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"github.com/hvuhsg/spliti/plugin/collision"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/scene"
 )
@@ -17,6 +18,7 @@ func Builtin(r *Registry) {
 	Register[render3d.Parent](r, "Parent", "render3d")
 	Register[render3d.GlobalTransform](r, "GlobalTransform", "render3d")
 	Register[scene.Name](r, "Name", "scene")
+	Register[collision.Collider3D](r, "Collider3D", "collision")
 
 	// Engine plumbing: present on entities but managed by the engine/editor,
 	// not meant for hand editing in the inspector.

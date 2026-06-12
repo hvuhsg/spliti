@@ -87,6 +87,10 @@ func drawComponent(c *app.Ctx, st *state, e ecs.Entity, inst string, ti *registr
 		key: fmt.Sprintf("%v/%s", e, ti.Name),
 	}
 	comp := ti.Get(w, e)
+	if ti.Name == "Collider3D" && st.layers != nil && len(st.layers.Names) > 0 {
+		drawColliderFields(fc, comp)
+		return
+	}
 	for _, f := range ti.Fields {
 		drawField(fc, f.Name, f.Kind, f.Value(comp))
 	}

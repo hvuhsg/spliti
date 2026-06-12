@@ -101,6 +101,12 @@ type state struct {
 	// file watcher (external edits → live world)
 	watch *sceneWatcher
 
+	// collision layers (//spliti:layers const block; optional)
+	layers      *srcmodel.LayersFile
+	layersErr   error
+	layerEdit   map[int]string // staged rename buffers, keyed by bit
+	newLayerBuf string
+
 	// play mode (M3): game systems run only while playing; Stop restores the
 	// pre-play snapshot.
 	mode            playMode
@@ -153,6 +159,7 @@ func newState(p Plugin) *state {
 		undo:              undo.NewStack(0),
 		dirty:             make(map[string]time.Time),
 		dragStart:         make(map[ecs.Entity]render3d.Transform3D),
+		layerEdit:         make(map[int]string),
 		eulerCache:        make(map[string][3]float32),
 		editBefore:        make(map[string]any),
 		aabbMeshCache:     make(map[string][2]m.Vec3),
@@ -185,6 +192,7 @@ func (p Plugin) Build(a *app.App) {
 			p.SetupScene(c)
 		}
 		st.loadSceneSource()
+		st.loadLayers()
 		st.startWatcher()
 		st.restoreSession(c)
 	})
@@ -236,7 +244,7 @@ func (st *state) installLayoutPersistence(io *imgui.IO) {
 
 // layoutVersion identifies the default dock layout; bump it when adding or
 // removing a docked panel so stale user layouts are rebuilt once.
-const layoutVersion = "2"
+const layoutVersion = "3"
 
 // installSmokeHooks wires the headless-verification env hooks (used by CI and
 // scripted runs; inert otherwise): SPLITI_EDITOR_FRAMES bounds the run,
@@ -294,6 +302,7 @@ func editorUI(c *app.Ctx) {
 	drawInspector(c, st)
 	drawAssets(c, st)
 	drawSystems(c, st)
+	drawLayers(c, st)
 	drawConsole(c, st)
 	drawViewport(c, st)
 }
