@@ -3,6 +3,7 @@ package render3d
 import (
 	"fmt"
 	"math"
+	"sort"
 
 	"github.com/cogentcore/webgpu/wgpu"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
@@ -128,6 +129,20 @@ func (r *MeshRegistry) CPU(ref string) *Mesh {
 		return nil
 	}
 	return gm.cpu
+}
+
+// Keys returns the refs of every registered mesh, sorted. The editor uses it to
+// offer a dropdown of known meshes instead of a free-text field.
+func (r *MeshRegistry) Keys() []string {
+	if r == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(r.byRef))
+	for k := range r.byRef {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // get returns the uploaded mesh for ref, or nil if not registered.

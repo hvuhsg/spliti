@@ -19,8 +19,11 @@ User-reported issues and requests (2026-06-13), plus previously deferred follow-
 4. **W/E/R hotkeys don't switch gizmo modes** — ~~pressing W/E/R should select move/rotate/scale.~~
    **Done.** Same root cause as #3: `handleShortcuts` bailed on `WantCaptureKeyboard` with keyboard
    nav enabled. Re-gated on `WantTextInput`.
-5. **Dropdowns for asset-keyed fields** — materials should be picked from a dropdown of known
-   materials, not typed into a text field; same for meshes and other registered assets.
+5. **Dropdowns for asset-keyed fields** — ~~materials should be picked from a dropdown of known
+   materials, not typed into a text field; same for meshes and other registered assets.~~ **Done.**
+   Added `MeshRegistry.Keys()` / `MaterialRegistry.Keys()` (sorted) and an inspector combo for
+   `MeshRenderer.Mesh` and `MaterialRef.Material`: pick from registered keys, "(none)" clears the
+   ref (registry falls back to its default), and an unregistered current value stays visible.
 6. **Asset thumbnail previews** in the Assets panel.
 7. **Drag-in asset import** — dragging files (models, textures, …) from the OS into the editor
    should copy them into `assets/` and register them.

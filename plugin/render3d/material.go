@@ -3,6 +3,7 @@ package render3d
 import (
 	"fmt"
 	"image"
+	"sort"
 
 	"github.com/cogentcore/webgpu/wgpu"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
@@ -91,6 +92,21 @@ func (r *MaterialRegistry) Load(ref string, mat Material) error {
 	}
 	r.byRef[ref] = gm
 	return nil
+}
+
+// Keys returns the refs of every registered material, sorted. The editor uses it
+// to offer a dropdown of known materials instead of a free-text field. The
+// fallback default material has no ref and is not listed.
+func (r *MaterialRegistry) Keys() []string {
+	if r == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(r.byRef))
+	for k := range r.byRef {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // upload creates the uniform buffer, textures, and bind group for a material.

@@ -92,7 +92,60 @@ func drawComponent(c *app.Ctx, st *state, e ecs.Entity, inst string, ti *registr
 		return
 	}
 	for _, f := range ti.Fields {
+		if keys, ok := assetRefKeys(c, ti.Name, f.Name); ok {
+			drawAssetRefField(fc, f.Name, f.Value(comp), keys)
+			continue
+		}
 		drawField(fc, f.Name, f.Kind, f.Value(comp))
+	}
+}
+
+// assetRefKeys reports whether a component field holds a registered-asset key
+// (and returns the known keys for its dropdown). These are the string fields
+// that reference assets by ref, so the inspector can offer a pick list rather
+// than a free-text box that silently accepts unknown names.
+func assetRefKeys(c *app.Ctx, comp, field string) ([]string, bool) {
+	switch {
+	case comp == "MeshRenderer" && field == "Mesh":
+		if r := app.GetResource[render3d.MeshRegistry](c); r != nil {
+			return r.Keys(), true
+		}
+	case comp == "MaterialRef" && field == "Material":
+		if r := app.GetResource[render3d.MaterialRegistry](c); r != nil {
+			return r.Keys(), true
+		}
+	}
+	return nil, false
+}
+
+// drawAssetRefField edits a string asset key as a combo of registered keys.
+// "(none)" clears the ref (the registry falls back to its default); an
+// unregistered current value stays visible and selected rather than vanishing.
+func drawAssetRefField(fc fieldCtx, name string, v reflect.Value, keys []string) {
+	cur := v.String()
+	label := cur
+	if label == "" {
+		label = "(none)"
+	}
+	if !imgui.BeginCombo(name, label) {
+		return
+	}
+	defer imgui.EndCombo()
+	if imgui.SelectableBoolV("(none)", cur == "", 0, imgui.Vec2{}) && cur != "" {
+		v.SetString("")
+		fc.commitNow()
+	}
+	known := false
+	for _, k := range keys {
+		sel := k == cur
+		known = known || sel
+		if imgui.SelectableBoolV(k, sel, 0, imgui.Vec2{}) && !sel {
+			v.SetString(k)
+			fc.commitNow()
+		}
+	}
+	if cur != "" && !known {
+		imgui.SelectableBoolV(cur+"  (unregistered)", true, 0, imgui.Vec2{})
 	}
 }
 
