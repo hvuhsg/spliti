@@ -4,6 +4,7 @@ import (
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
+	"github.com/mlange-42/arche/ecs"
 	"github.com/mlange-42/arche/generic"
 )
 
@@ -50,6 +51,94 @@ func drawSelectionBox(c *app.Ctx, st *state) {
 			render3d.Line(c, corners[e[0]], corners[e[1]], col)
 		}
 	}
+}
+
+// lightIconRadius is the pick radius (and icon scale) of light entities,
+// which usually have no mesh for the raycaster to hit.
+const lightIconRadius = float32(0.4)
+
+// drawLightIcons marks every light's position in the scene's line pass: a
+// 6-ray star for point lights, a circled direction arrow for directional
+// lights. The icons double as pick targets (see pickLight).
+func drawLightIcons(c *app.Ctx, st *state) {
+	w := c.World()
+	gtMap := generic.NewMap[render3d.GlobalTransform](w)
+	star := func(p m.Vec3, r float32, col m.Vec4) {
+		for _, d := range [3]m.Vec3{{X: r}, {Y: r}, {Z: r}} {
+			render3d.Line(c, p.Sub(d), p.Add(d), col)
+		}
+		k := r * 0.55
+		for _, d := range [4]m.Vec3{{X: k, Y: k, Z: k}, {X: -k, Y: k, Z: k}, {X: k, Y: k, Z: -k}, {X: -k, Y: k, Z: -k}} {
+			render3d.Line(c, p.Sub(d), p.Add(d), col)
+		}
+	}
+	app.Query1[render3d.PointLight](c, func(e ecs.Entity, pl *render3d.PointLight) {
+		if !gtMap.Has(e) {
+			return
+		}
+		mat := gtMap.Get(e).Matrix
+		p := m.Vec3{X: mat[12], Y: mat[13], Z: mat[14]}
+		star(p, lightIconRadius, lightColor(pl.Color))
+	})
+	app.Query1[render3d.DirectionalLight](c, func(e ecs.Entity, dl *render3d.DirectionalLight) {
+		if !gtMap.Has(e) {
+			return
+		}
+		mat := gtMap.Get(e).Matrix
+		p := m.Vec3{X: mat[12], Y: mat[13], Z: mat[14]}
+		col := lightColor(dl.Color)
+		star(p, lightIconRadius*0.7, col)
+		dir := dl.Direction.Normalize()
+		if dir != (m.Vec3{}) {
+			render3d.Line(c, p, p.Add(dir.Scale(lightIconRadius*4)), col)
+		}
+	})
+}
+
+// lightColor renders a light's color as a bright, alpha-solid line color.
+func lightColor(col m.Vec3) m.Vec4 {
+	c := col
+	if c == (m.Vec3{}) {
+		c = m.Vec3{X: 1, Y: 1, Z: 1}
+	}
+	n := max(c.X, max(c.Y, c.Z))
+	if n > 0 {
+		c = c.Scale(1 / n)
+	}
+	return m.Vec4{X: c.X, Y: c.Y, Z: c.Z, W: 0.95}
+}
+
+// pickLight tests the pick ray against every light's icon sphere, so lights
+// are selectable even without a mesh. Returns the nearest hit distance.
+func pickLight(c *app.Ctx, origin, dir m.Vec3) (ecs.Entity, float32, bool) {
+	w := c.World()
+	gtMap := generic.NewMap[render3d.GlobalTransform](w)
+	d := dir.Normalize()
+	var best ecs.Entity
+	bestT := float32(0)
+	found := false
+	test := func(e ecs.Entity) {
+		if !gtMap.Has(e) {
+			return
+		}
+		mat := gtMap.Get(e).Matrix
+		p := m.Vec3{X: mat[12], Y: mat[13], Z: mat[14]}
+		// Ray-sphere: closest approach of the ray to the icon center.
+		oc := p.Sub(origin)
+		t := oc.Dot(d)
+		if t <= 0 {
+			return
+		}
+		if oc.Sub(d.Scale(t)).Length() > lightIconRadius {
+			return
+		}
+		if !found || t < bestT {
+			best, bestT, found = e, t, true
+		}
+	}
+	app.Query1[render3d.PointLight](c, func(e ecs.Entity, _ *render3d.PointLight) { test(e) })
+	app.Query1[render3d.DirectionalLight](c, func(e ecs.Entity, _ *render3d.DirectionalLight) { test(e) })
+	return best, bestT, found
 }
 
 // meshBounds returns the cached model-space AABB of a registered mesh.

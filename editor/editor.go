@@ -218,6 +218,7 @@ func (p Plugin) Build(a *app.App) {
 		st.cam.apply(c)
 		drawGrid(c)
 		drawSelectionBox(c, st)
+		drawLightIcons(c, st)
 	})
 	a.AddSystems(schedule.First, drainWatcher, checkRebuild)
 	a.AddSystems(schedule.Update, editorUI)

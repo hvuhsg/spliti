@@ -75,13 +75,13 @@ func drawViewport(c *app.Ctx, st *state) {
 		multi := io.KeyCtrl() || io.KeySuper()
 		mp := imgui.MousePos()
 		origin, dir := cam.ScreenToRay(float64(mp.X-imageMin.X), float64(mp.Y-imageMin.Y), w, h)
-		if hit, ok := render3d.Raycast(c, origin, dir); ok {
-			if multi {
-				st.toggleSelect(hit.Entity)
-			} else {
-				st.selectOne(hit.Entity)
-			}
-		} else if !multi {
+		picked, ok := pickEntity(c, origin, dir)
+		switch {
+		case ok && multi:
+			st.toggleSelect(picked)
+		case ok:
+			st.selectOne(picked)
+		case !multi:
 			st.clearSelection()
 		}
 	}
@@ -199,6 +199,25 @@ func followsSelected(c *app.Ctx, st *state, e ecs.Entity) bool {
 		}
 	}
 	return false
+}
+
+// pickEntity resolves a pick ray to the nearest entity: mesh raycast and
+// light-icon spheres compete by distance, so meshless lights are selectable.
+func pickEntity(c *app.Ctx, origin, dir m.Vec3) (ecs.Entity, bool) {
+	hit, hitOK := render3d.Raycast(c, origin, dir)
+	light, lightT, lightOK := pickLight(c, origin, dir)
+	switch {
+	case hitOK && lightOK:
+		if lightT < hit.Dist {
+			return light, true
+		}
+		return hit.Entity, true
+	case hitOK:
+		return hit.Entity, true
+	case lightOK:
+		return light, true
+	}
+	return ecs.Entity{}, false
 }
 
 // localize re-expresses a world matrix in the entity's parent space (parents
