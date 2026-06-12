@@ -81,7 +81,13 @@ func cmdEdit() error {
 	if err != nil {
 		return err
 	}
-	return runDir(p.EditorDir(), []string{"CGO_ENABLED=1"}, "go", "run", ".")
+	// Build to a stable path instead of `go run`: the editor's own
+	// rebuild-and-restart flow re-execs this binary in place.
+	bin := filepath.Join(p.EditorDir(), "spliti-editor")
+	if err := runDir(p.EditorDir(), []string{"CGO_ENABLED=1"}, "go", "build", "-o", bin, "."); err != nil {
+		return err
+	}
+	return runDir(p.Root, nil, bin)
 }
 
 func cmdBuild(args []string) error {
