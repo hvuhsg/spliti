@@ -37,19 +37,27 @@ func (st *state) loadSceneSource() {
 	st.src, st.srcErr = f, nil
 }
 
-// flushWriteback runs in schedule.Last: once an instance's debounce deadline
-// passes, its live transform is written into the scene source. One Save per
-// frame batch.
+// flushWriteback runs in schedule.Last: expired live-transform scrubs are
+// folded into the source model, then the model is saved once its own debounce
+// deadline passes.
 func flushWriteback(c *app.Ctx) {
 	st := app.GetResource[state](c)
-	if len(st.dirty) == 0 || st.src == nil {
+	st.drainDirty(c, false)
+	if st.pendingSave && !time.Now().Before(st.saveAt) {
+		st.saveNow(c, false)
+	}
+}
+
+// drainDirty writes expired (or, when forced, all) live-transform edits into
+// the scene model and schedules a save.
+func (st *state) drainDirty(c *app.Ctx, force bool) {
+	if len(st.dirty) == 0 || st.src == nil || st.srcErr != nil {
 		return
 	}
 	now := time.Now()
 	sc := st.src.Scene(st.cfg.Scene)
-	wrote := false
 	for inst, deadline := range st.dirty {
-		if now.Before(deadline) {
+		if !force && now.Before(deadline) {
 			continue
 		}
 		delete(st.dirty, inst)
@@ -65,49 +73,85 @@ func flushWriteback(c *app.Ctx) {
 			st.status(err.Error())
 			continue
 		}
-		wrote = true
+		st.pendingSave = true
+		st.saveAt = now
 	}
-	if !wrote {
+}
+
+// saveNow persists the scene model to disk. force also folds in any pending
+// live-transform scrubs first (the Ctrl+S path).
+func (st *state) saveNow(c *app.Ctx, force bool) {
+	if force {
+		st.drainDirty(c, true)
+	}
+	if st.src == nil || st.srcErr != nil || !st.pendingSave {
 		return
 	}
 	if err := st.src.Save(); err != nil {
 		st.status(fmt.Sprintf("save failed: %v", err))
 		return
 	}
+	st.pendingSave = false
 	st.status(fmt.Sprintf("saved %s", st.cfg.SceneFile))
 }
 
-// reloadScene re-reads the scene file from disk and applies every editable
-// spawn transform to its live entity. M1 scope: transform sync only —
-// added/removed spawn lines are reported but need a restart.
+// reloadScene re-reads the scene file from disk and makes the live world match
+// it: transforms and component overrides are applied to existing instances,
+// instances missing live are spawned from their prefab, and live instances
+// whose spawn line is gone are despawned. Unsaved editor changes and the undo
+// history are discarded — disk wins on an explicit reload (and on watcher-
+// detected external edits, which share this path).
 func reloadScene(c *app.Ctx, st *state) {
-	// Drop pending writes: disk wins on an explicit reload.
 	st.dirty = make(map[string]time.Time)
+	st.pendingSave = false
 	st.loadSceneSource()
+	st.undo.Clear()
 	if st.srcErr != nil {
 		return
 	}
 	sc := st.src.Scene(st.cfg.Scene)
-	applied, missing := 0, 0
-	tm := generic.NewMap[render3d.Transform3D](c.World())
+
+	// Despawn live instances whose spawn line disappeared.
+	inModel := map[string]bool{}
 	for _, sp := range sc.Spawns {
-		if sp.Transform == nil || !sp.Transform.Editable {
+		inModel[sp.Instance] = true
+	}
+	type doomed struct {
+		e    ecs.Entity
+		name string
+	}
+	var gone []doomed
+	app.Query1[scene.Name](c, func(e ecs.Entity, n *scene.Name) {
+		if !inModel[n.Value] {
+			gone = append(gone, doomed{e, n.Value})
+		}
+	})
+	for _, d := range gone {
+		// The entity may already be dead: a parent earlier in the list takes
+		// its subtree with it.
+		if c.World().Alive(d.e) {
+			despawnSubtree(c, d.e)
+			st.deselectIf(d.e)
+		}
+	}
+
+	// Sync every model spawn into the live world, parents before children
+	// (source order guarantees a parent line's instances precede it).
+	applied, failed := 0, 0
+	for _, sp := range sc.Spawns {
+		if err := syncInstanceFromModel(c, st, sp); err != nil {
+			failed++
+			st.status(fmt.Sprintf("%s: %v", sp.Instance, err))
 			continue
 		}
-		e, ok := entityByInstance(c, sp.Instance)
-		if !ok {
-			missing++
-			continue
-		}
-		if !tm.Has(e) {
-			continue
-		}
-		*tm.Get(e) = sp.Transform.Value()
 		applied++
 	}
-	msg := fmt.Sprintf("reloaded: %d transform(s) applied", applied)
-	if missing > 0 {
-		msg += fmt.Sprintf("; %d new spawn line(s) need a restart", missing)
+	msg := fmt.Sprintf("reloaded: %d instance(s) synced", applied)
+	if len(gone) > 0 {
+		msg += fmt.Sprintf(", %d despawned", len(gone))
+	}
+	if failed > 0 {
+		msg += fmt.Sprintf(", %d failed", failed)
 	}
 	st.status(msg)
 }

@@ -57,6 +57,21 @@ type internal struct{} // unexported: skipped
 
 type Alias = Health // not a struct decl: skipped
 `)
+	writeFile(t, filepath.Join(dir, "game/entities/crate.go"), `package entities
+
+//spliti:entity
+func SpawnCrate(c *app.Ctx, t render3d.Transform3D) ecs.Entity {
+	return ecs.Entity{}
+}
+
+// no directive: skipped
+func SpawnHelper(c *app.Ctx, t render3d.Transform3D) ecs.Entity {
+	return ecs.Entity{}
+}
+
+//spliti:entity
+func badArity(c *app.Ctx) {} // unexported and wrong shape: skipped
+`)
 	return dir
 }
 
@@ -74,6 +89,9 @@ func TestLoadAndGenerate(t *testing.T) {
 	}
 	if strings.Join(p.Components, ",") != "Health,Spinner" {
 		t.Fatalf("components = %v", p.Components)
+	}
+	if strings.Join(p.Prefabs, ",") != "SpawnCrate" {
+		t.Fatalf("prefabs = %v", p.Prefabs)
 	}
 	if p.EngineVersion != "v0.0.0" || !strings.HasSuffix(p.EngineReplace, "engine") || !filepath.IsAbs(p.EngineReplace) {
 		t.Fatalf("engine wiring = %q %q", p.EngineVersion, p.EngineReplace)
@@ -105,7 +123,10 @@ func TestLoadAndGenerate(t *testing.T) {
 		"//go:build !js")
 	mustContain("registry_gen.go",
 		"registry.Register[components.Health](r, \"Health\", \"components\")",
-		"registry.Register[components.Spinner](r, \"Spinner\", \"components\")")
+		"registry.Register[components.Spinner](r, \"Spinner\", \"components\")",
+		`"entities.SpawnCrate": entities.SpawnCrate,`,
+		`"demo/game/entities"`)
+	mustContain("main.go", "Prefabs:     buildPrefabs()")
 }
 
 func TestLoadRejectsScenelessProject(t *testing.T) {

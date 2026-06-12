@@ -45,6 +45,7 @@ type Project struct {
 	Config     Config
 	Scenes     []string // //spliti:scene names in the configured scene file
 	Components []string // exported struct names in game/components
+	Prefabs    []string // //spliti:entity function names in game/entities
 
 	// Engine module wiring, read from the game's go.mod, for the generated
 	// target's own go.mod (see Generate).
@@ -92,6 +93,10 @@ func Load(root string) (*Project, error) {
 	}
 
 	p.Components, err = exportedStructs(filepath.Join(abs, "game", "components"))
+	if err != nil {
+		return nil, err
+	}
+	p.Prefabs, err = prefabFuncs(filepath.Join(abs, "game", "entities"))
 	if err != nil {
 		return nil, err
 	}
@@ -212,6 +217,52 @@ func exportedStructs(dir string) ([]string, error) {
 	return out, nil
 }
 
+// prefabFuncs lists the exported //spliti:entity functions of dir's package:
+// func SpawnX(c *app.Ctx, t render3d.Transform3D) ecs.Entity. The signature is
+// checked by arity only (param/result counts); the generated code's compile
+// enforces the rest. A missing directory is fine.
+func prefabFuncs(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	fset := token.NewFileSet()
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			return nil, fmt.Errorf("gen: parse %s: %w", e.Name(), err)
+		}
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || !fn.Name.IsExported() || fn.Recv != nil || fn.Doc == nil {
+				continue
+			}
+			directive := false
+			for _, cm := range fn.Doc.List {
+				if strings.TrimSpace(strings.TrimPrefix(cm.Text, "//")) == "spliti:entity" {
+					directive = true
+				}
+			}
+			if !directive {
+				continue
+			}
+			if fn.Type.Params == nil || len(fn.Type.Params.List) != 2 ||
+				fn.Type.Results == nil || len(fn.Type.Results.List) != 1 {
+				continue
+			}
+			out = append(out, fn.Name.Name)
+		}
+	}
+	return out, nil
+}
+
 var gomodTmpl = template.Must(template.New("gomod").Parse(`module spliti-editor-target
 
 go 1.25.0
@@ -270,6 +321,7 @@ func main() {
 			LoadAssets:  game.LoadAssets,
 			GameSystems: game.RegisterSystems,
 			Registry:    buildRegistry(),
+			Prefabs:     buildPrefabs(),
 		},
 	)
 	a.Run()
@@ -282,10 +334,15 @@ var registryTmpl = template.Must(template.New("registry").Parse(`// Code generat
 package main
 
 import (
+	"github.com/hvuhsg/spliti/editor"
 	"github.com/hvuhsg/spliti/editor/registry"
+{{- if or .Components .Prefabs}}
+{{end}}
 {{- if .Components}}
-
 	"{{.Module}}/game/components"
+{{- end}}
+{{- if .Prefabs}}
+	"{{.Module}}/game/entities"
 {{- end}}
 )
 
@@ -296,5 +353,13 @@ func buildRegistry() *registry.Registry {
 	registry.Register[components.{{.}}](r, "{{.}}", "components")
 {{- end}}
 	return r
+}
+
+func buildPrefabs() map[string]editor.PrefabFunc {
+	return map[string]editor.PrefabFunc{
+{{- range .Prefabs}}
+		"entities.{{.}}": entities.{{.}},
+{{- end}}
+	}
 }
 `))

@@ -37,8 +37,13 @@ type SceneFile struct {
 	Pkg    string
 	Scenes []*Scene
 
-	file *dst.File
+	file        *dst.File
+	lastWritten []byte
 }
+
+// LastWritten returns the bytes of the most recent successful Save — file
+// watchers compare against it to ignore the editor's own writes.
+func (f *SceneFile) LastWritten() []byte { return f.lastWritten }
 
 // Scene is one //spliti:scene function inside a SceneFile.
 type Scene struct {
@@ -51,15 +56,41 @@ type Scene struct {
 	file *SceneFile
 }
 
-// Spawn is one recognized scene.Spawn statement.
+// Spawn is one recognized scene.Spawn statement, together with the recognized
+// attachment lines (scene.Set / scene.Remove / scene.Parent) that reference its
+// variable.
 type Spawn struct {
 	Instance  string // the string-literal instance name (stable identity)
 	Var       string // assigned variable name; "" for `_ =` or bare-call forms
 	Prefab    string // prefab function as written, e.g. "entities.SpawnCrate"
 	Transform *Transform
 
+	Sets       []*SetLine    // scene.Set override lines, in source order
+	Removes    []*RemoveLine // scene.Remove[T] lines, in source order
+	ParentLine *ParentLine   // scene.Parent line naming this spawn as child, if any
+
 	stmt       dst.Stmt
 	prefabCall *dst.CallExpr
+}
+
+// Set returns the spawn's scene.Set line for the given component type, or nil.
+func (sp *Spawn) Set(typeName string) *SetLine {
+	for _, sl := range sp.Sets {
+		if sl.Type == typeName {
+			return sl
+		}
+	}
+	return nil
+}
+
+// Removed returns the spawn's scene.Remove line for the given type, or nil.
+func (sp *Spawn) Removed(typeName string) *RemoveLine {
+	for _, rl := range sp.Removes {
+		if rl.Type == typeName {
+			return rl
+		}
+	}
+	return nil
 }
 
 // Transform is the parsed render3d.XForm() builder chain on a spawn line. Nil
@@ -107,7 +138,7 @@ func ParseSceneSource(src []byte, path string) (*SceneFile, error) {
 			continue
 		}
 		sc := &Scene{Name: name, FuncName: fn.Name.Name, fn: fn, ctx: ctxParamName(fn), file: sf}
-		sc.scanSpawns()
+		sc.rescan()
 		sf.Scenes = append(sf.Scenes, sc)
 	}
 	return sf, nil
@@ -167,7 +198,11 @@ func (f *SceneFile) Save() error {
 	if info, err := os.Stat(f.Path); err == nil {
 		os.Chmod(tmpName, info.Mode())
 	}
-	return os.Rename(tmpName, f.Path)
+	if err := os.Rename(tmpName, f.Path); err != nil {
+		return err
+	}
+	f.lastWritten = out
+	return nil
 }
 
 // Spawn returns the spawn statement for the given instance name, or nil.
@@ -207,15 +242,44 @@ func ctxParamName(fn *dst.FuncDecl) string {
 	return "c"
 }
 
-// scanSpawns walks the scene function body and records every recognized
-// scene.Spawn statement, in order. Unrecognized statements are left alone.
-func (s *Scene) scanSpawns() {
+// rescan walks the scene function body and rebuilds the recognized model:
+// spawn statements in order, then the attachment lines (scene.Set/Remove/
+// Parent) that reference spawn variables. Go's declare-before-use guarantees a
+// single pass suffices. Unrecognized statements are left alone. Every
+// structural mutation re-runs this, so model pointers are invalidated by
+// mutation — always re-look-up by instance name.
+func (s *Scene) rescan() {
+	s.Spawns = nil
 	if s.fn.Body == nil {
 		return
 	}
+	byVar := map[string]*Spawn{}
 	for _, stmt := range s.fn.Body.List {
 		if sp := recognizeSpawn(stmt); sp != nil {
 			s.Spawns = append(s.Spawns, sp)
+			if sp.Var != "" {
+				byVar[sp.Var] = sp
+			}
+			continue
+		}
+		if sl := recognizeSet(stmt); sl != nil {
+			if sp := byVar[sl.ref]; sp != nil {
+				sp.Sets = append(sp.Sets, sl)
+			}
+			continue
+		}
+		if rl := recognizeRemove(stmt); rl != nil {
+			if sp := byVar[rl.ref]; sp != nil {
+				sp.Removes = append(sp.Removes, rl)
+			}
+			continue
+		}
+		if pl := recognizeParent(stmt); pl != nil {
+			child, parent := byVar[pl.childRef], byVar[pl.parentRef]
+			if child != nil && parent != nil && child.ParentLine == nil {
+				pl.Parent = parent.Instance
+				child.ParentLine = pl
+			}
 		}
 	}
 }

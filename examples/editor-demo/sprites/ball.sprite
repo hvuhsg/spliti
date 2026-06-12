@@ -1,8 +1,0 @@
-ref = "ball"
-w = 1
-h = 1
-rows = ["●"]
-
-[style]
-fg = "yellow"
-bold = true

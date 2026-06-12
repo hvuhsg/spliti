@@ -42,10 +42,7 @@ func newTestEditor(t *testing.T) (*app.Ctx, *state, ecs.Entity, string) {
 	}
 
 	a := app.New()
-	st := &state{
-		cfg:   Plugin{ProjectRoot: dir, SceneFile: "main.go", Scene: "Main"},
-		dirty: make(map[string]time.Time),
-	}
+	st := newState(Plugin{ProjectRoot: dir, SceneFile: "main.go", Scene: "Main"})
 	app.InsertResource(a, st)
 	c := a.Ctx()
 

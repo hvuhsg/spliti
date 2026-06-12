@@ -1,6 +1,8 @@
 package editor
 
 import (
+	"strings"
+
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/editor/gizmo"
@@ -8,6 +10,7 @@ import (
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	"github.com/hvuhsg/spliti/plugin/ui"
+	"github.com/mlange-42/arche/ecs"
 	"github.com/mlange-42/arche/generic"
 )
 
@@ -50,6 +53,17 @@ func drawViewport(c *app.Ctx, st *state) {
 	imageMin := imgui.CursorScreenPos()
 	imgui.Image(*imgui.NewTextureRefTextureID(st.texID), avail)
 	st.vpHovered = imgui.IsItemHovered()
+
+	// Prefab drop from the Assets panel: spawn where the drop ray lands.
+	if imgui.BeginDragDropTarget() {
+		if imgui.AcceptDragDropPayload(prefabDragType) != nil && st.dragPrefab != "" {
+			mp := imgui.MousePos()
+			origin, dir := cam.ScreenToRay(float64(mp.X-imageMin.X), float64(mp.Y-imageMin.Y), w, h)
+			st.spawnPrefab(c, st.dragPrefab, dropPoint(c, origin, dir))
+			st.dragPrefab = ""
+		}
+		imgui.EndDragDropTarget()
+	}
 
 	st.cam.handleInput(st.vpHovered)
 
@@ -113,24 +127,81 @@ func drawSelectionGizmo(c *app.Ctx, st *state, rectMin, rectSize m.Vec2) {
 		Snap:      snap,
 	}
 	if st.gz.Manipulate(imgui.WindowDrawList(), f, st.op, gizmo.World, &model) {
-		local := model
-		// The gizmo manipulates the world matrix; re-localize under the
-		// parent chain before storing the local transform.
-		if pm := (generic.NewMap[render3d.Parent](world)); pm.Has(st.selected) {
-			parent := pm.Get(st.selected).Entity
-			if world.Alive(parent) && gtMap.Has(parent) {
-				if inv, ok := gtMap.Get(parent).Matrix.Inverse(); ok {
-					local = inv.Mul(model)
-				}
-			}
-		}
 		t := tMap.Get(st.selected)
-		t.Translation, t.Rotation, t.Scale = decomposeTRS(local)
+		t.Translation, t.Rotation, t.Scale = decomposeTRS(localize(c, st.selected, model))
 		// Keep the world matrix coherent within this frame (the renderer's
 		// propagateTransforms recomputes it next frame anyway).
 		gtMap.Get(st.selected).Matrix = model
 	}
 	if st.gz.Finished() {
-		st.markTransformDirty(instanceName(c, st.selected))
+		// One undo command per drag: before from the world matrix captured at
+		// drag start, after is the live local transform the drag produced.
+		var before render3d.Transform3D
+		before.Translation, before.Rotation, before.Scale =
+			decomposeTRS(localize(c, st.selected, st.gz.StartModel()))
+		st.push(c, &cmdTransform{
+			instance: instanceName(c, st.selected),
+			entity:   st.selected,
+			before:   before,
+			after:    *tMap.Get(st.selected),
+		})
 	}
+}
+
+// localize re-expresses a world matrix in the entity's parent space (parents
+// do not move during a drag, so this is valid for both drag start and end).
+func localize(c *app.Ctx, e ecs.Entity, model m.Mat4) m.Mat4 {
+	world := c.World()
+	pm := generic.NewMap[render3d.Parent](world)
+	if !pm.Has(e) {
+		return model
+	}
+	parent := pm.Get(e).Entity
+	gtMap := generic.NewMap[render3d.GlobalTransform](world)
+	if !world.Alive(parent) || !gtMap.Has(parent) {
+		return model
+	}
+	if inv, ok := gtMap.Get(parent).Matrix.Inverse(); ok {
+		return inv.Mul(model)
+	}
+	return model
+}
+
+// spawnPrefab pushes a spawn command placing a new instance of the prefab at
+// the given world point.
+func (st *state) spawnPrefab(c *app.Ctx, prefab string, at m.Vec3) {
+	base := strings.TrimPrefix(prefab, "entities.")
+	base = strings.TrimPrefix(base, "Spawn")
+	if base == "" {
+		base = "instance"
+	}
+	base = strings.ToLower(base[:1]) + base[1:]
+	name := base
+	if _, exists := entityByInstance(c, name); exists {
+		name = st.freeInstanceName(c, base)
+	} else if sc := st.scene(); sc != nil && sc.Spawn(name) != nil {
+		name = st.freeInstanceName(c, base)
+	}
+	cmd := &cmdSpawn{instance: name, prefab: prefab, t: render3d.XForm().At(at.X, at.Y, at.Z)}
+	st.push(c, cmd)
+	if e, ok := entityByInstance(c, name); ok {
+		st.selected, st.hasSelected = e, true
+	}
+}
+
+// spawnPointFallback is where double-click spawns land.
+var spawnPointFallback = m.Vec3{}
+
+// dropPoint resolves a drop ray to a world position: the first mesh hit, else
+// the ground plane (y = 0), else a point a few units down the ray.
+func dropPoint(c *app.Ctx, origin, dir m.Vec3) m.Vec3 {
+	if hit, ok := render3d.Raycast(c, origin, dir); ok {
+		return hit.Point
+	}
+	d := dir.Normalize()
+	if d.Y < -1e-4 && origin.Y > 0 {
+		t := -origin.Y / d.Y
+		return origin.Add(d.Scale(t))
+	}
+	return origin.Add(d.Scale(6))
 }
