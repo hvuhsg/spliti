@@ -47,8 +47,11 @@ func applyResize(c *app.Ctx, g *GPU) {
 	ensureMSAATarget(g)
 	ensureDepthTarget(g)
 
-	cam := app.GetResource[Camera3D](c)
-	if cam != nil {
-		cam.aspect = float32(w) / float32(h)
+	// With an offscreen scene target the camera frames the target, not the
+	// window, and its aspect is owned by the caller (Camera3D.SetAspect).
+	if g.target == nil {
+		if cam := app.GetResource[Camera3D](c); cam != nil {
+			cam.aspect = float32(w) / float32(h)
+		}
 	}
 }

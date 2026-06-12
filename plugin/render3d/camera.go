@@ -55,6 +55,16 @@ func (c *Camera3D) Projection() m.Mat4 {
 	return m.Perspective(m.DegToRad(fov), aspect, near, far)
 }
 
+// SetAspect overrides the projection aspect ratio (width/height). Normally the
+// resize handler keeps it matched to the window; when the scene renders into an
+// offscreen target (SetSceneTarget) the caller drives it from the target's size
+// instead.
+func (c *Camera3D) SetAspect(a float32) {
+	if a > 0 {
+		c.aspect = a
+	}
+}
+
 // ScreenToRay unprojects a window pixel (px,py, origin at the top-left, y down)
 // into a world-space ray. vw,vh are the viewport size in the same pixel units. It
 // returns the ray origin on the near plane and a normalized direction pointing
