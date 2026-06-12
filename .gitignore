@@ -35,3 +35,8 @@
 
 # Compiled example binaries left next to their source by `go build`.
 examples/rf-lab/rf-lab
+
+# The spliti CLI built into the repo root, and local playground projects
+# scaffolded with `spliti new` while testing the editor.
+/spliti
+/testgame/
