@@ -33,8 +33,14 @@ User-reported issues and requests (2026-06-13), plus previously deferred follow-
 6. **Asset thumbnail previews** in the Assets panel.
 7. **Drag-in asset import** — dragging files (models, textures, …) from the OS into the editor
    should copy them into `assets/` and register them.
-8. **Collider visualization + editing** — show the collider wireframe in the viewport and allow
+8. **Collider visualization + editing** — ~~show the collider wireframe in the viewport~~ and allow
    editing its transform/extents there (gizmo on the collider, not just the entity transform).
+   **Visualization done.** `drawColliderBoxes` (editor/aids.go) outlines every `collision.Collider3D`
+   as a green world-space AABB in the scene line pass each frame — a box centered on the entity's
+   world position spanning ±`Half`, axis-aligned and unrotated, matching exactly what the broad phase
+   tests (so it shows the real collision bounds, not the mesh AABB). Shares the new `lineBox`/`boxEdges`
+   helpers with `drawSelectionBox`. **Still open:** in-viewport gizmo editing of the collider's extents
+   (today `Half` is editable only via the inspector).
 9. **Removing collision layers** — ~~the Layers panel can name/add layers but offers no way to
    remove one.~~ **Done.** Added `LayersFile.Remove` plus an "x" button on the last row. Only the
    highest bit can be popped (renumbers nothing); removing a middle bit is refused since it would

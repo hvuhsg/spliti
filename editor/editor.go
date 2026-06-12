@@ -250,6 +250,7 @@ func (p Plugin) Build(a *app.App) {
 		drawGrid(c)
 		drawSelectionBox(c, st)
 		drawLightIcons(c, st)
+		drawColliderBoxes(c)
 	})
 	a.AddSystems(schedule.First, drainWatcher, checkRebuild)
 	a.AddSystems(schedule.Update, editorUI)

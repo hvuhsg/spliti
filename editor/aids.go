@@ -2,6 +2,7 @@ package editor
 
 import (
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/collision"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	"github.com/mlange-42/arche/ecs"
@@ -43,14 +44,56 @@ func drawSelectionBox(c *app.Ctx, st *state) {
 		if sel != prim {
 			col = m.Vec4{X: 0.95, Y: 0.55, Z: 0.1, W: 0.55}
 		}
-		for _, e := range [12][2]int{
-			{0, 1}, {2, 3}, {4, 5}, {6, 7}, // X edges
-			{0, 2}, {1, 3}, {4, 6}, {5, 7}, // Y edges
-			{0, 4}, {1, 5}, {2, 6}, {3, 7}, // Z edges
-		} {
-			render3d.Line(c, corners[e[0]], corners[e[1]], col)
-		}
+		lineBox(c, corners, col)
 	}
+}
+
+// boxEdges indexes the 12 edges of an 8-corner box, where a corner's index
+// bits select the high coordinate on each axis (bit 0 = X, 1 = Y, 2 = Z).
+var boxEdges = [12][2]int{
+	{0, 1}, {2, 3}, {4, 5}, {6, 7}, // X edges
+	{0, 2}, {1, 3}, {4, 6}, {5, 7}, // Y edges
+	{0, 4}, {1, 5}, {2, 6}, {3, 7}, // Z edges
+}
+
+// lineBox pushes the 12 edges of a corner-indexed box into the line pass.
+func lineBox(c *app.Ctx, corners [8]m.Vec3, col m.Vec4) {
+	for _, e := range boxEdges {
+		render3d.Line(c, corners[e[0]], corners[e[1]], col)
+	}
+}
+
+// drawColliderBoxes outlines every Collider3D's collision volume in the line
+// pass: a box centered on the entity's world position spanning ±Half on each
+// axis, axis-aligned and unrotated — exactly what the broad phase tests, so the
+// wireframe shows the real collision bounds rather than the mesh AABB.
+func drawColliderBoxes(c *app.Ctx) {
+	w := c.World()
+	gtMap := generic.NewMap[render3d.GlobalTransform](w)
+	col := m.Vec4{X: 0.3, Y: 0.9, Z: 0.45, W: 0.8}
+	app.Query1[collision.Collider3D](c, func(e ecs.Entity, cl *collision.Collider3D) {
+		if !gtMap.Has(e) {
+			return
+		}
+		mat := gtMap.Get(e).Matrix
+		ctr := m.Vec3{X: mat[12], Y: mat[13], Z: mat[14]}
+		h := cl.Half
+		var corners [8]m.Vec3
+		for i := range corners {
+			p := ctr.Sub(h)
+			if i&1 != 0 {
+				p.X = ctr.X + h.X
+			}
+			if i&2 != 0 {
+				p.Y = ctr.Y + h.Y
+			}
+			if i&4 != 0 {
+				p.Z = ctr.Z + h.Z
+			}
+			corners[i] = p
+		}
+		lineBox(c, corners, col)
+	})
 }
 
 // lightIconRadius is the pick radius (and icon scale) of light entities,
