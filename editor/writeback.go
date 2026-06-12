@@ -35,6 +35,7 @@ func (st *state) loadSceneSource() {
 		return
 	}
 	st.src, st.srcErr = f, nil
+	st.applySymbolicLayers()
 }
 
 // flushWriteback runs in schedule.Last: expired live-transform scrubs are

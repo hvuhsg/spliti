@@ -637,7 +637,7 @@ func syncInstanceFromModel(c *app.Ctx, st *state, sp *srcmodel.Spawn) error {
 			continue
 		}
 		v := reflect.New(ti.Type).Elem()
-		if err := srcmodel.ApplyLitRefs(sl.Lit(), v, st.varLookup(c)); err != nil {
+		if err := srcmodel.ApplyLitLayers(sl.Lit(), v, st.varLookup(c), st.symLayers); err != nil {
 			st.status(fmt.Sprintf("%s: %v", sp.Instance, err))
 			continue
 		}

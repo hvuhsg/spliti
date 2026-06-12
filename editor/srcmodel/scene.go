@@ -54,6 +54,9 @@ type Scene struct {
 	fn   *dst.FuncDecl
 	ctx  string // name of the *app.Ctx parameter, used when emitting new lines
 	file *SceneFile
+	// layers, when set (SetLayers), lets scene.Set literals use the game's
+	// named layer constants — both when encoding and when judging editability.
+	layers *Layers
 }
 
 // Spawn is one recognized scene.Spawn statement, together with the recognized
@@ -266,7 +269,7 @@ func (s *Scene) rescan() {
 			}
 			continue
 		}
-		if sl := recognizeSet(stmt, vars); sl != nil {
+		if sl := recognizeSet(stmt, vars, s.layers); sl != nil {
 			if sp := byVar[sl.ref]; sp != nil {
 				sp.Sets = append(sp.Sets, sl)
 			}

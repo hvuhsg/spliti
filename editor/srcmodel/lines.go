@@ -42,8 +42,9 @@ type ParentLine struct {
 
 // recognizeSet matches `scene.Set(c, ref, pkg.Type{...})`. vars is the set of
 // spawn variable names declared so far — identifiers naming them inside the
-// literal are entity references, which stay editable.
-func recognizeSet(stmt dst.Stmt, vars map[string]bool) *SetLine {
+// literal are entity references, which stay editable. layers, when non-nil,
+// lets named layer constants count as editable too.
+func recognizeSet(stmt dst.Stmt, vars map[string]bool, layers *Layers) *SetLine {
 	call := exprStmtCall(stmt)
 	if call == nil || !isPkgCall(call, scenePkg, "Set") || len(call.Args) != 3 {
 		return nil
@@ -62,7 +63,7 @@ func recognizeSet(stmt dst.Stmt, vars map[string]bool) *SetLine {
 	}
 	return &SetLine{
 		Type:     typeName,
-		Editable: compositeEditable(lit, vars),
+		Editable: compositeEditable(lit, vars, layers),
 		ref:      ref,
 		stmt:     stmt,
 		lit:      lit,

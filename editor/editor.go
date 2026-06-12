@@ -61,6 +61,10 @@ type Plugin struct {
 	// so the editor can spawn instances live (Assets panel, undo of delete,
 	// watcher-discovered spawn lines).
 	Prefabs map[string]PrefabFunc
+	// GamePkg is the import path of the game's root package (the one holding
+	// the //spliti:layers block). When set and named layers exist, scene.Set
+	// lines write layer bits as named constants (game.LayerPlayer). Optional.
+	GamePkg string
 }
 
 // state is the editor's central resource.
@@ -121,6 +125,10 @@ type state struct {
 	layersErr   error
 	layerEdit   map[int]string // staged rename buffers, keyed by bit
 	newLayerBuf string
+	// symLayers is the symbolic-layer table installed on the scene model
+	// (named layer constants in scene.Set lines); nil when the project has no
+	// named layers or no GamePkg.
+	symLayers *srcmodel.Layers
 
 	// input bindings (//spliti:input function; optional)
 	input         *srcmodel.InputFile

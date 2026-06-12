@@ -18,9 +18,28 @@ func (st *state) loadLayers() {
 	path, ok := srcmodel.FindLayersFile(dir)
 	if !ok {
 		st.layers, st.layersErr = nil, nil
+		st.applySymbolicLayers()
 		return
 	}
 	st.layers, st.layersErr = srcmodel.ParseLayersFile(path)
+	st.applySymbolicLayers()
+}
+
+// applySymbolicLayers (re)installs the named-layer table on the scene model so
+// scene.Set lines read and write game.LayerX constants. Called after a layers
+// load and after a scene reload — each replaces the other's target.
+func (st *state) applySymbolicLayers() {
+	st.symLayers = nil
+	if st.layers != nil && st.cfg.GamePkg != "" && len(st.layers.Names) > 0 {
+		st.symLayers = &srcmodel.Layers{
+			Pkg:        st.layers.Pkg,
+			ImportPath: st.cfg.GamePkg,
+			Names:      append([]string(nil), st.layers.Names...),
+		}
+	}
+	if sc := st.scene(); sc != nil {
+		sc.SetLayers(st.symLayers)
+	}
 }
 
 // saveLayers persists a layers edit immediately (no debounce — these edits
