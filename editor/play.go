@@ -82,6 +82,11 @@ func (st *state) startPlay(c *app.Ctx) {
 	}
 	st.saveNow(c, true)
 	st.snapshot = takeSnapshot(c, st.reg)
+	// Resources are not snapshotted, but the game camera is engine-owned and
+	// user-visible in the Game panel — keep it so Stop puts it back.
+	if gc := app.GetResource[render3d.Camera3D](c); gc != nil {
+		st.gameCamBefore = *gc
+	}
 	st.mode = modePlaying
 	st.logf(logInfo, "play: %d entities snapshotted", len(st.snapshot.entities))
 }
@@ -141,6 +146,9 @@ func (st *state) stopPlay(c *app.Ctx) {
 	}
 	st.snapshot.restore(c)
 	st.snapshot = nil
+	if gc := app.GetResource[render3d.Camera3D](c); gc != nil {
+		*gc = st.gameCamBefore
+	}
 	st.mode = modeEdit
 	st.stepPending, st.stepActive = false, false
 	st.clearSelection()
