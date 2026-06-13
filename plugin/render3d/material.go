@@ -41,6 +41,12 @@ type Material struct {
 
 	Alpha       AlphaMode
 	AlphaCutoff float32 // threshold for AlphaMask (default 0.5)
+
+	// DoubleSided disables back-face culling for opaque draws using this material,
+	// so both faces of an open or single-surface mesh (a teapot, a leaf, a cloth)
+	// are shaded instead of seen through from the inside. Mirrors glTF's
+	// doubleSided. Has no effect on Transparent entities, which never cull.
+	DoubleSided bool
 }
 
 // materialUBOBytes is the size of the material uniform block: baseColor(16) +
@@ -54,9 +60,10 @@ const materialUBOFloats = materialUBOBytes / 4 // 20
 // textures it owns (the shared default textures are not owned and not released
 // here).
 type materialGPU struct {
-	buf       *wgpu.Buffer
-	bindGroup *wgpu.BindGroup
-	owned     []*texture
+	buf         *wgpu.Buffer
+	bindGroup   *wgpu.BindGroup
+	owned       []*texture
+	doubleSided bool // selects the opaque no-cull pipeline for this material's batches
 }
 
 // MaterialRegistry maps a string ref to an uploaded GPU material. Entities select
@@ -191,7 +198,7 @@ func (r *MaterialRegistry) upload(mat Material) *materialGPU {
 		}
 		panic("render3d: material bind group: " + err.Error())
 	}
-	return &materialGPU{buf: buf, bindGroup: bg, owned: owned}
+	return &materialGPU{buf: buf, bindGroup: bg, owned: owned, doubleSided: mat.DoubleSided}
 }
 
 // get returns the material for ref, or the default material if ref is empty or

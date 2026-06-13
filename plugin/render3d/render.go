@@ -360,12 +360,24 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder, cam *Camera3D,
 	}
 
 	// Opaque draws use the pipeline + frame bind group already bound by the caller.
+	// A double-sided material's batch switches to the no-cull opaque pipeline (the
+	// frame bind group is layout-compatible, so it stays bound); cur tracks the
+	// bound pipeline to avoid redundant switches.
+	cur := g.pipeline
 	for _, b := range d.batches {
 		gm := meshes.get(b.mesh)
 		if gm == nil {
 			continue
 		}
 		mat := materials.get(b.material)
+		want := g.pipeline
+		if mat.doubleSided {
+			want = g.doubleSidedPipeline
+		}
+		if want != cur {
+			pass.SetPipeline(want)
+			cur = want
+		}
 		off := uint64(b.start * instanceStride)
 		size := uint64(b.count * instanceStride)
 		pass.SetBindGroup(1, mat.bindGroup, nil)

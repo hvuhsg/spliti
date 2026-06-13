@@ -91,6 +91,9 @@ type GPU struct {
 	config   *wgpu.SurfaceConfiguration
 
 	pipeline *wgpu.RenderPipeline
+	// doubleSidedPipeline is the opaque pipeline with back-face culling disabled,
+	// used for batches whose material is DoubleSided (open/single-surface meshes).
+	doubleSidedPipeline *wgpu.RenderPipeline
 	// transparentPipeline shares the layout and shader but blends with depth-write
 	// off, for the back-to-front translucent pass after opaque geometry.
 	transparentPipeline *wgpu.RenderPipeline
@@ -372,6 +375,9 @@ func releaseGPU(g *GPU) {
 	g.views = nil
 	if g.transparentPipeline != nil {
 		g.transparentPipeline.Release()
+	}
+	if g.doubleSidedPipeline != nil {
+		g.doubleSidedPipeline.Release()
 	}
 	if g.pipeline != nil {
 		g.pipeline.Release()

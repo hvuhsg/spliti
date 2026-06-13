@@ -239,6 +239,7 @@ func convertMaterial(doc *gltf.Document, gm *gltf.Material, readURI func(string)
 		}
 	}
 	mat.Emissive = m.Vec3{X: float32(gm.EmissiveFactor[0]), Y: float32(gm.EmissiveFactor[1]), Z: float32(gm.EmissiveFactor[2])}
+	mat.DoubleSided = gm.DoubleSided
 	if gm.NormalTexture != nil && gm.NormalTexture.Index != nil {
 		img, err := decodeTexture(doc, *gm.NormalTexture.Index, readURI)
 		if err != nil {

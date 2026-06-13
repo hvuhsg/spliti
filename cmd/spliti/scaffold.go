@@ -193,6 +193,9 @@ func LoadAssets(c *app.Ctx) {
 	must(materials.Load("ceramic", render3d.Material{
 		BaseColor: render3d.Color{R: 0.93, G: 0.92, B: 0.96, A: 1},
 		Roughness: 0.3,
+		// The teapot is an open single-surface mesh; draw both faces so its
+		// inner walls are shaded instead of seen through from above.
+		DoubleSided: true,
 	}))
 }
 

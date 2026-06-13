@@ -122,11 +122,15 @@ func buildPipeline(g *GPU) {
 		panic("render3d: material bgl: " + err.Error())
 	}
 
-	g.pipeline, err = buildRenderPipeline(g, false)
+	g.pipeline, err = buildRenderPipeline(g, false, false)
 	if err != nil {
 		panic("render3d: render pipeline: " + err.Error())
 	}
-	g.transparentPipeline, err = buildRenderPipeline(g, true)
+	g.doubleSidedPipeline, err = buildRenderPipeline(g, false, true)
+	if err != nil {
+		panic("render3d: double-sided pipeline: " + err.Error())
+	}
+	g.transparentPipeline, err = buildRenderPipeline(g, true, false)
 	if err != nil {
 		panic("render3d: transparent pipeline: " + err.Error())
 	}
@@ -173,8 +177,10 @@ func newFrameBindGroup(g *GPU) *wgpu.BindGroup {
 //
 // When transparent is true the pipeline uses premultiplied-alpha blending with
 // depth-test ON but depth-write OFF, and no back-face culling — the configuration
-// for translucent shells drawn back-to-front over the opaque scene.
-func buildRenderPipeline(g *GPU, transparent bool) (*wgpu.RenderPipeline, error) {
+// for translucent shells drawn back-to-front over the opaque scene. When
+// doubleSided is true (opaque only) back-face culling is likewise disabled so
+// both faces of an open mesh are shaded.
+func buildRenderPipeline(g *GPU, transparent, doubleSided bool) (*wgpu.RenderPipeline, error) {
 	shader, err := g.device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
 		Label:          "spliti.render3d.shader",
 		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaderCode},
@@ -226,7 +232,7 @@ func buildRenderPipeline(g *GPU, transparent bool) (*wgpu.RenderPipeline, error)
 		Primitive: wgpu.PrimitiveState{
 			Topology:  wgpu.PrimitiveTopologyTriangleList,
 			FrontFace: wgpu.FrontFaceCCW,
-			CullMode:  cullMode(transparent),
+			CullMode:  cullMode(transparent || doubleSided),
 		},
 		DepthStencil: &wgpu.DepthStencilState{
 			Format:            g.depthFormat,
@@ -248,10 +254,11 @@ func buildRenderPipeline(g *GPU, transparent bool) (*wgpu.RenderPipeline, error)
 	})
 }
 
-// cullMode returns back-face culling for opaque solids and no culling for
-// transparent shells (whose inner faces should still contribute).
-func cullMode(transparent bool) wgpu.CullMode {
-	if transparent {
+// cullMode returns no culling when faces must be drawn from both sides
+// (transparent shells and double-sided materials) and back-face culling for
+// ordinary closed solids.
+func cullMode(noCull bool) wgpu.CullMode {
+	if noCull {
 		return wgpu.CullModeNone
 	}
 	return wgpu.CullModeBack
@@ -392,17 +399,25 @@ func disableMSAA(g *GPU) {
 		return
 	}
 	g.samples = 1
-	p, err := buildRenderPipeline(g, false)
+	p, err := buildRenderPipeline(g, false, false)
 	if err != nil {
 		return
 	}
-	tp, err := buildRenderPipeline(g, true)
+	dp, err := buildRenderPipeline(g, false, true)
 	if err != nil {
 		p.Release()
 		return
 	}
+	tp, err := buildRenderPipeline(g, true, false)
+	if err != nil {
+		p.Release()
+		dp.Release()
+		return
+	}
 	g.pipeline.Release()
 	g.pipeline = p
+	g.doubleSidedPipeline.Release()
+	g.doubleSidedPipeline = dp
 	g.transparentPipeline.Release()
 	g.transparentPipeline = tp
 	ensureDepthTarget(g)
