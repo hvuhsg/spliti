@@ -15,6 +15,7 @@ import (
 func TestMonoFontGlyphCoverage(t *testing.T) {
 	imgui.CreateContext()
 	defer imgui.DestroyContext()
+	imgui.CurrentIO().SetIniFilename("") // don't write an imgui.ini in the package dir
 
 	fonts := imgui.CurrentIO().Fonts()
 	fonts.AddFontDefault()

@@ -20,6 +20,7 @@ func TestTextureProtocol(t *testing.T) {
 	defer imgui.DestroyContext()
 
 	io := imgui.CurrentIO()
+	io.SetIniFilename("") // don't write an imgui.ini in the package dir
 	io.SetDisplaySize(imgui.Vec2{X: 1280, Y: 800})
 	io.SetDeltaTime(1.0 / 60)
 	io.SetBackendFlags(imgui.BackendFlagsRendererHasTextures | imgui.BackendFlagsRendererHasVtxOffset)
