@@ -18,6 +18,16 @@ type sessionData struct {
 	Selected  string   `json:"selected,omitempty"`
 	Selection []string `json:"selection,omitempty"`
 	Camera    sessCam  `json:"camera"`
+	View      sessView `json:"view"`
+}
+
+// sessView persists the editor's look settings (View menu). A pointer-free
+// value type so a missing "view" key restores as the zero value, which
+// restoreSession treats as "keep the defaults".
+type sessView struct {
+	Theme     int     `json:"theme"`
+	FontScale float32 `json:"fontScale"`
+	ShowGrid  bool    `json:"showGrid"`
 }
 
 type sessCam struct {
@@ -41,6 +51,11 @@ func (st *state) saveSession(c *app.Ctx) {
 			Dist:  st.cam.dist,
 			Yaw:   st.cam.yaw,
 			Pitch: st.cam.pitch,
+		},
+		View: sessView{
+			Theme:     st.view.themeIdx,
+			FontScale: clampFontScale(st.view.fontScale),
+			ShowGrid:  st.view.showGrid,
 		},
 	}
 	for _, e := range st.sel {
@@ -74,6 +89,15 @@ func (st *state) restoreSession(c *app.Ctx) {
 		st.cam.pivot.X, st.cam.pivot.Y, st.cam.pivot.Z = s.Camera.Pivot[0], s.Camera.Pivot[1], s.Camera.Pivot[2]
 		st.cam.dist = s.Camera.Dist
 		st.cam.yaw, st.cam.pitch = s.Camera.Yaw, s.Camera.Pitch
+	}
+	// FontScale is the presence sentinel: a session predating the View menu has
+	// no "view" key, so it unmarshals to the zero value (which would mean grid
+	// off, zero font) — keep the defaults in that case.
+	if s.View.FontScale > 0 {
+		st.view.themeIdx = s.View.Theme
+		st.view.fontScale = clampFontScale(s.View.FontScale)
+		st.view.showGrid = s.View.ShowGrid
+		st.view.theme() // repair an out-of-range theme index
 	}
 	sel := s.Selection
 	if len(sel) == 0 && s.Selected != "" {

@@ -158,6 +158,10 @@ type state struct {
 	// native macOS "File" menu item handles (zero value / inert off darwin)
 	menu fileMenu
 
+	// view holds the editor's look settings (theme, font size, grid) driven by
+	// the native "View" menu, persisted in the session.
+	view viewState
+
 	// console
 	console           console
 	consoleAutoScroll bool
@@ -197,6 +201,7 @@ func newState(p Plugin) *state {
 		cfg:               p,
 		reg:               reg,
 		op:                gizmo.Translate,
+		view:              defaultView(),
 		cam:               defaultRig(),
 		undo:              undo.NewStack(0),
 		dirty:             make(map[string]time.Time),
@@ -218,6 +223,7 @@ func (p Plugin) Build(a *app.App) {
 	// Cocoa menu bar, so the native "File" menu can be installed now. Off
 	// darwin this is a no-op and the commands stay in the in-app menu bar.
 	st.buildNativeMenu(a.Ctx())
+	st.buildViewMenu(a.Ctx())
 
 	// Game systems register through an interceptor that records them for the
 	// Systems panel and gates each behind Play mode (and its panel toggle).
@@ -266,7 +272,9 @@ func (p Plugin) Build(a *app.App) {
 
 	render3d.AddPreRender(a, func(c *app.Ctx) {
 		st.cam.apply(st.edCam)
-		drawGrid(c)
+		if st.view.showGrid {
+			drawGrid(c)
+		}
 		drawSelectionBox(c, st)
 		drawLightIcons(c, st)
 		drawCameraIcons(c, st)
@@ -368,7 +376,8 @@ func editorUI(c *app.Ctx) {
 	st := app.GetResource[state](c)
 	st.pruneSelection(c)
 	st.handleShortcuts(c)
-	nColors, nVars := pushEditorTheme()
+	st.view.apply()
+	nColors, nVars := pushEditorTheme(st.view.theme())
 	drawShell(c, st)
 	drawHierarchy(c, st)
 	drawInspector(c, st)
@@ -418,6 +427,12 @@ func (st *state) handleShortcuts(c *app.Ctx) {
 		st.saveNow(c, true)
 	case ctrl && imgui.IsKeyPressedBool(imgui.KeyD):
 		st.duplicateSelection(c)
+	case ctrl && (imgui.IsKeyPressedBool(imgui.KeyEqual) || imgui.IsKeyPressedBool(imgui.KeyKeypadAdd)):
+		st.view.zoomFont(fontScaleStep)
+	case ctrl && (imgui.IsKeyPressedBool(imgui.KeyMinus) || imgui.IsKeyPressedBool(imgui.KeyKeypadSubtract)):
+		st.view.zoomFont(-fontScaleStep)
+	case ctrl && imgui.IsKeyPressedBool(imgui.Key0):
+		st.view.resetFont()
 	case imgui.IsKeyPressedBool(imgui.KeyDelete) || imgui.IsKeyPressedBool(imgui.KeyBackspace):
 		st.deleteSelection(c)
 	case imgui.IsKeyPressedBool(imgui.KeyW):

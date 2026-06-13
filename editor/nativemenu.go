@@ -58,4 +58,5 @@ func menuTick(c *app.Ctx) {
 	macmenu.Dispatch()
 	st := app.GetResource[state](c)
 	st.refreshNativeMenu()
+	st.refreshViewMenu()
 }

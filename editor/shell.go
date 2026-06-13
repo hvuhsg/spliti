@@ -85,6 +85,8 @@ func drawShell(c *app.Ctx, st *state) {
 			}
 			imgui.Separator()
 			exportControls(st)
+			imgui.Separator()
+			drawViewMenuInApp(st)
 		}
 		if st.rebuildNeeded || st.rebuild.running.Load() {
 			imgui.Separator()
