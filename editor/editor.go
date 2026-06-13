@@ -162,6 +162,10 @@ type state struct {
 	console           console
 	consoleAutoScroll bool
 
+	// terminal: an interactive shell panel tabbed beside the Console. Lazily
+	// started on first draw; killed on exit.
+	term *terminal
+
 	// per-widget Euler cache for quaternion fields (activation-scoped so a
 	// drag never feeds back through the lossy quat→Euler conversion).
 	eulerCache map[string][3]float32
@@ -252,6 +256,9 @@ func (p Plugin) Build(a *app.App) {
 	// rebuild requested it. Hooks run after window/terminal cleanup.
 	a.AddOnExit(func() {
 		st.saveSession(a.Ctx())
+		if st.term != nil {
+			st.term.kill()
+		}
 		if st.execOnExit != "" {
 			execReplace(st.execOnExit)
 		}
@@ -298,7 +305,7 @@ func (st *state) installLayoutPersistence(io *imgui.IO) {
 
 // layoutVersion identifies the default dock layout; bump it when adding or
 // removing a docked panel so stale user layouts are rebuilt once.
-const layoutVersion = "4"
+const layoutVersion = "5"
 
 // installSmokeHooks wires the headless-verification env hooks (used by CI and
 // scripted runs; inert otherwise): SPLITI_EDITOR_FRAMES bounds the run,
@@ -370,6 +377,7 @@ func editorUI(c *app.Ctx) {
 	drawLayers(c, st)
 	drawInput(c, st)
 	drawConsole(c, st)
+	drawTerminal(c, st)
 	drawViewport(c, st)
 	drawGameView(c, st)
 	imgui.PopStyleColorV(nColors)
@@ -377,6 +385,12 @@ func editorUI(c *app.Ctx) {
 }
 
 func (st *state) handleShortcuts(c *app.Ctx) {
+	// While the Terminal panel has focus its keystrokes belong to the shell, not
+	// the editor's gizmo/save/undo shortcuts. (Reads last frame's focus; the lag
+	// is harmless.)
+	if st.term != nil && st.term.focused {
+		return
+	}
 	io := imgui.CurrentIO()
 	// Gate on WantTextInput, not WantCaptureKeyboard: with NavEnableKeyboard
 	// set, the latter is true whenever any window (including the focused Scene

@@ -15,6 +15,13 @@ import (
 func feedInput(c *app.Ctx, io *imgui.IO) {
 	scale := float32(uiScale(c))
 
+	// Reset the per-frame raw-rune buffer; the terminal panel reads it via
+	// FrameRunes for keystrokes ImGui would otherwise route only to a widget.
+	b := app.GetResource[Backend](c)
+	if b != nil {
+		b.frameRunes = b.frameRunes[:0]
+	}
+
 	for _, ev := range app.ReadEvents[inputs.MouseMoveEvent](c) {
 		io.AddMousePosEvent(float32(ev.X)*scale, float32(ev.Y)*scale)
 	}
@@ -31,6 +38,9 @@ func feedInput(c *app.Ctx, io *imgui.IO) {
 	for _, ev := range app.ReadEvents[inputs.KeyEvent](c) {
 		if ev.Rune != 0 { // typed text (Key is 0 for these)
 			io.AddInputCharacter(uint32(ev.Rune))
+			if b != nil {
+				b.frameRunes = append(b.frameRunes, ev.Rune)
+			}
 			continue
 		}
 		// Keep the aggregate modifier chord in sync from the event's mod mask.
@@ -82,6 +92,10 @@ var keyMap = map[inputs.Key]imgui.Key{
 	inputs.KeyDelete:       imgui.KeyDelete,
 	inputs.KeyBackspace:    imgui.KeyBackspace,
 	inputs.KeySpace:        imgui.KeySpace,
+	inputs.KeyMinus:        imgui.KeyMinus,
+	inputs.KeyEqual:        imgui.KeyEqual,
+	inputs.KeyKPAdd:        imgui.KeyKeypadAdd,
+	inputs.KeyKPSubtract:   imgui.KeyKeypadSubtract,
 	inputs.KeyEnter:        imgui.KeyEnter,
 	inputs.KeyKPEnter:      imgui.KeyKeypadEnter,
 	inputs.KeyEscape:       imgui.KeyEscape,

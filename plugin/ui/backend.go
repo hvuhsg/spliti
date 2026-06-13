@@ -73,6 +73,16 @@ type Backend struct {
 
 	// Reusable per-frame scratch concatenating every command list's geometry.
 	vtxData, idxData []byte
+
+	// frameRunes holds this frame's typed characters, captured in feedInput
+	// before ImGui routes them to a focused text widget. Panels that consume raw
+	// keystrokes (the editor terminal) read them via FrameRunes; reset each frame.
+	frameRunes []rune
+
+	// monoFont is the embedded monospace font (JetBrains Mono) added at startup,
+	// exposed via MonoFont. The Terminal panel pushes it to draw box-drawing and
+	// other glyphs the default font lacks. Nil if the asset failed to load.
+	monoFont *imgui.Font
 }
 
 func newBackend() *Backend {
