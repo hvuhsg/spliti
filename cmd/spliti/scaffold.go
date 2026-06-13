@@ -156,6 +156,7 @@ func LoadAssets(c *app.Ctx) {
 	must(meshes.Load("ground", render3d.Plane(20, 20, 1, 1)))
 	must(meshes.Load("crate", render3d.Cube(1)))
 	must(meshes.Load("sphere", render3d.UVSphere(0.6, 48, 32)))
+	must(meshes.Load("teapot", render3d.Teapot(1)))
 	must(materials.Load("ground", render3d.Material{
 		BaseColor: render3d.Color{R: 0.5, G: 0.5, B: 0.55, A: 1},
 		Roughness: 0.9,
@@ -167,6 +168,10 @@ func LoadAssets(c *app.Ctx) {
 	must(materials.Load("plastic", render3d.Material{
 		BaseColor: render3d.Color{R: 0.85, G: 0.15, B: 0.18, A: 1},
 		Roughness: 0.4,
+	}))
+	must(materials.Load("ceramic", render3d.Material{
+		BaseColor: render3d.Color{R: 0.93, G: 0.92, B: 0.96, A: 1},
+		Roughness: 0.3,
 	}))
 }
 
@@ -296,6 +301,27 @@ func SpawnSphere(c *app.Ctx, t render3d.Transform3D) ecs.Entity {
 }
 `,
 
+	"game/entities/teapot.go": `package entities
+
+import (
+	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/render3d"
+	"github.com/hvuhsg/spliti/scene"
+	"github.com/mlange-42/arche/ecs"
+
+	"{{.Module}}/game/components"
+)
+
+// SpawnTeapot makes the ceramic teapot that slowly spins (see systems.Spin).
+//
+//spliti:entity
+func SpawnTeapot(c *app.Ctx, t render3d.Transform3D) ecs.Entity {
+	e := render3d.NewMesh(c, t, "teapot", "ceramic")
+	scene.Set(c, e, components.Spinner{Speed: 0.5})
+	return e
+}
+`,
+
 	"game/entities/sun.go": `package entities
 
 import (
@@ -337,8 +363,7 @@ import (
 func Main(c *app.Ctx) {
 	_ = scene.Spawn(c, "ground", entities.SpawnGround(c, render3d.XForm()))
 	_ = scene.Spawn(c, "sun", entities.SpawnSun(c, render3d.XForm().EulerDeg(-60, 30, 0)))
-	_ = scene.Spawn(c, "crate1", entities.SpawnCrate(c, render3d.XForm().At(-1.4, 0.5, 0)))
-	_ = scene.Spawn(c, "sphere1", entities.SpawnSphere(c, render3d.XForm().At(1.4, 0.6, 0)))
+	_ = scene.Spawn(c, "teapot", entities.SpawnTeapot(c, render3d.XForm().At(0, 0, 0)))
 }
 `,
 }

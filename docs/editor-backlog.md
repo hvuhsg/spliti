@@ -51,8 +51,14 @@ User-reported issues and requests (2026-06-13), plus previously deferred follow-
     stray `.Scale(-1)`, so `D` (right) moved `-X` and `A` (left) moved `+X`. Pan already used the
     correct `viewBasis` right (`fwd × up` = `+X` when looking down `-Z`); dropping the extra negation
     makes strafe agree with it.
-11. **Default start scene = spinning teapot** — a newly-created game's starting scene should be a
-    teapot model slowly spinning, instead of whatever the current empty/default scaffold is.
+11. **Default start scene = spinning teapot** — ~~a newly-created game's starting scene should be a
+    teapot model slowly spinning, instead of whatever the current empty/default scaffold is.~~
+    **Done.** Added `render3d.Teapot(scale)` (plugin/render3d/teapot.go): a compact *procedural*
+    teapot (revolved body+lid+knob plus swept tube spout and handle) — not the Bezier Utah teapot, so
+    no embedded patch data — with normals from triangle winding (unit-tested for outward-facing
+    revolution/tube normals and a sane bounding box). The scaffold's default scene
+    (cmd/spliti/scaffold.go) is now ground + sun + a centered `SpawnTeapot` carrying a slow
+    `Spinner{Speed: 0.5}`; added a `ceramic` material and the `teapot` mesh to `LoadAssets`.
 12. **Prefab creation UX** — there's no discoverable way to create a prefab. Add an explicit
     affordance (e.g. "Create prefab" from an entity's context menu or a button in the Assets panel)
     that registers the selected entity/subtree as a prefab.
