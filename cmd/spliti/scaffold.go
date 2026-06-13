@@ -2,12 +2,20 @@ package main
 
 import (
 	"bytes"
+	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"text/template"
 )
+
+// teapotOBJ is the Utah teapot model copied into every new project as a normal
+// game asset (game/assets/teapot.obj). The generated LoadAssets loads it from
+// disk with render3d.LoadOBJ — nothing is baked into the engine.
+//
+//go:embed teapot.obj
+var teapotOBJ []byte
 
 // scaffold writes a new game project under dir (which must not exist yet).
 // engine, when non-empty, becomes a local `replace` directive in go.mod.
@@ -38,6 +46,15 @@ func scaffold(dir, engine string) error {
 		if err := os.WriteFile(full, buf.Bytes(), 0o644); err != nil {
 			return err
 		}
+	}
+
+	// Copy the teapot model in as a normal binary asset (not a templated file).
+	assetDir := filepath.Join(dir, "game", "assets")
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "teapot.obj"), teapotOBJ, 0o644); err != nil {
+		return err
 	}
 
 	// Resolve dependencies so the project builds out of the box.
@@ -156,7 +173,11 @@ func LoadAssets(c *app.Ctx) {
 	must(meshes.Load("ground", render3d.Plane(20, 20, 1, 1)))
 	must(meshes.Load("crate", render3d.Cube(1)))
 	must(meshes.Load("sphere", render3d.UVSphere(0.6, 48, 32)))
-	must(meshes.Load("teapot", render3d.Teapot(1)))
+	// teapot.obj is a normal project asset loaded from disk (relative to the
+	// project root, where the game and editor both run).
+	teapot, err := render3d.LoadOBJ("game/assets/teapot.obj")
+	must(err)
+	must(meshes.Load("teapot", teapot))
 	must(materials.Load("ground", render3d.Material{
 		BaseColor: render3d.Color{R: 0.5, G: 0.5, B: 0.55, A: 1},
 		Roughness: 0.9,
@@ -363,7 +384,7 @@ import (
 func Main(c *app.Ctx) {
 	_ = scene.Spawn(c, "ground", entities.SpawnGround(c, render3d.XForm()))
 	_ = scene.Spawn(c, "sun", entities.SpawnSun(c, render3d.XForm().EulerDeg(-60, 30, 0)))
-	_ = scene.Spawn(c, "teapot", entities.SpawnTeapot(c, render3d.XForm().At(0, 0, 0)))
+	_ = scene.Spawn(c, "teapot", entities.SpawnTeapot(c, render3d.XForm().At(0, 0, 0).Scaled(0.45, 0.45, 0.45)))
 }
 `,
 }
