@@ -45,6 +45,24 @@ User-reported issues and requests (2026-06-13), plus previously deferred follow-
    remove one.~~ **Done.** Added `LayersFile.Remove` plus an "x" button on the last row. Only the
    highest bit can be popped (renumbers nothing); removing a middle bit is refused since it would
    silently renumber every later layer in compiled game code.
+10. **Inverted side-to-side movement** — ~~moving side to side in the editor is inverted: pressing
+    "go left" pans/moves right and "go right" moves left.~~ **Done.** The fly strafe was inverted:
+    `cameraRig.flyBasis` (editor/camera.go) computed its right vector as `fwd × up` then applied a
+    stray `.Scale(-1)`, so `D` (right) moved `-X` and `A` (left) moved `+X`. Pan already used the
+    correct `viewBasis` right (`fwd × up` = `+X` when looking down `-Z`); dropping the extra negation
+    makes strafe agree with it.
+11. **Default start scene = spinning teapot** — a newly-created game's starting scene should be a
+    teapot model slowly spinning, instead of whatever the current empty/default scaffold is.
+12. **Prefab creation UX** — there's no discoverable way to create a prefab. Add an explicit
+    affordance (e.g. "Create prefab" from an entity's context menu or a button in the Assets panel)
+    that registers the selected entity/subtree as a prefab.
+13. **Multi-scene support** — if scenes can't yet be created/switched/managed beyond a single one,
+    add multi-scene support (create new scenes, switch the active scene, list them in the editor).
+14. **Modern ImGui theme** — if it's possible to restyle the ImGui UI, give it a nicer, more modern
+    theme (colors, rounding, spacing, fonts).
+15. **Skybox support** — add a skybox to the scene and the ability to change it.
+16. **Export option in the toolbar** — there's no export option. Add one to the top menu bar
+    alongside "Window".
 
 ## Previously deferred (from M4)
 

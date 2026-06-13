@@ -107,7 +107,9 @@ func (r *cameraRig) flyBasis() (fwd, right m.Vec3) {
 		f = m.Vec3{Z: -1}
 	}
 	fwd = f.Normalize()
-	right = fwd.Cross(m.Vec3{Y: 1}).Normalize().Scale(-1)
+	// fwd × worldUp is the camera's right (+X when looking down -Z), matching
+	// viewBasis. An earlier extra Scale(-1) here inverted D/A strafe.
+	right = fwd.Cross(m.Vec3{Y: 1}).Normalize()
 	return fwd, right
 }
 
