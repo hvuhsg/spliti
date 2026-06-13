@@ -58,8 +58,12 @@ User-reported issues and requests (2026-06-13), plus previously deferred follow-
     that registers the selected entity/subtree as a prefab.
 13. **Multi-scene support** — if scenes can't yet be created/switched/managed beyond a single one,
     add multi-scene support (create new scenes, switch the active scene, list them in the editor).
-14. **Modern ImGui theme** — if it's possible to restyle the ImGui UI, give it a nicer, more modern
-    theme (colors, rounding, spacing, fonts).
+14. **Modern ImGui theme** — ~~if it's possible to restyle the ImGui UI, give it a nicer, more modern
+    theme (colors, rounding, spacing, fonts).~~ **Done.** Added `editor/theme.go`: a cool slate dark
+    palette with a single teal accent for interactive state, plus rounded frames/tabs/scrollbars and
+    roomier padding/spacing. cimgui-go v1.5.0 exposes no setters on the persistent `Style`, so
+    `pushEditorTheme` applies it per frame via `PushStyleColor`/`PushStyleVar` and `editorUI` pops the
+    exact counts it returns. (Fonts left as the ImGui default — the binding ships no alternate atlas.)
 15. **Skybox support** — add a skybox to the scene and the ability to change it.
 16. **Export option in the toolbar** — there's no export option. Add one to the top menu bar
     alongside "Window".

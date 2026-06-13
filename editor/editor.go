@@ -348,6 +348,7 @@ func editorUI(c *app.Ctx) {
 	st := app.GetResource[state](c)
 	st.pruneSelection(c)
 	st.handleShortcuts(c)
+	nColors, nVars := pushEditorTheme()
 	drawShell(c, st)
 	drawHierarchy(c, st)
 	drawInspector(c, st)
@@ -358,6 +359,8 @@ func editorUI(c *app.Ctx) {
 	drawConsole(c, st)
 	drawViewport(c, st)
 	drawGameView(c, st)
+	imgui.PopStyleColorV(nColors)
+	imgui.PopStyleVarV(nVars)
 }
 
 func (st *state) handleShortcuts(c *app.Ctx) {
