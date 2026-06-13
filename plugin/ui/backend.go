@@ -398,6 +398,13 @@ func (b *Backend) render(c *app.Ctx, dd *imgui.DrawData) {
 // textures to match ImGui's requests (the 1.92+ dynamic texture protocol).
 func (b *Backend) updateTextures(c *app.Ctx, dd *imgui.DrawData) {
 	for _, td := range dd.Textures().Slice() {
+		// ImGui leaves nil slots in the texture list while it swaps the font
+		// atlas (e.g. when the terminal font is resized, the old atlas texture is
+		// destroyed and a new one created). Any method call on a nil-backed entry
+		// dereferences a null C pointer and segfaults, so skip them.
+		if td.CData == nil {
+			continue
+		}
 		switch td.Status() {
 		case imgui.TextureStatusWantCreate:
 			b.createTexture(c, &td)
