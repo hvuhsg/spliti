@@ -138,6 +138,10 @@ func hierarchyContextMenu(c *app.Ctx, st *state, name string, e ecs.Entity) {
 	if imgui.MenuItemBool("Duplicate") {
 		st.duplicateSelection(c)
 	}
+	if imgui.MenuItemBool("Create prefab...") {
+		st.createPrefab(c, e)
+	}
+	imgui.SetItemTooltip("Write this mesh entity to game/entities as a //spliti:entity prefab")
 	pm := generic.NewMap[render3d.Parent](c.World())
 	if pm.Has(e) && instanceName(c, pm.Get(e).Entity) != "" {
 		if imgui.MenuItemBool("Unparent") {

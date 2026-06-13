@@ -59,9 +59,18 @@ User-reported issues and requests (2026-06-13), plus previously deferred follow-
     revolution/tube normals and a sane bounding box). The scaffold's default scene
     (cmd/spliti/scaffold.go) is now ground + sun + a centered `SpawnTeapot` carrying a slow
     `Spinner{Speed: 0.5}`; added a `ceramic` material and the `teapot` mesh to `LoadAssets`.
-12. **Prefab creation UX** — there's no discoverable way to create a prefab. Add an explicit
+12. **Prefab creation UX** — ~~there's no discoverable way to create a prefab. Add an explicit
     affordance (e.g. "Create prefab" from an entity's context menu or a button in the Assets panel)
-    that registers the selected entity/subtree as a prefab.
+    that registers the selected entity/subtree as a prefab.~~ **Done.** Added "Create prefab..." to
+    the hierarchy context menu (editor/prefab.go). It writes the selected mesh entity to
+    `game/entities/<name>.go` as a `//spliti:entity` function: `render3d.NewMesh(c, t, mesh, material)`
+    plus a `scene.Set` for each of its other editable components (Transform3D is the spawn argument,
+    so it is not baked in). Codegen lives in `srcmodel.RenderPrefab`, which reuses `LitForValue`/
+    `ensureImport` (the same path scene.Set writeback uses) and skips components that can't be
+    expressed as scene literals (e.g. entity refs). Since the new `SpawnX` is a fresh Go symbol, it
+    only becomes spawnable after Rebuild & Restart (flagged so the toolbar banner appears).
+    **Scoped:** single mesh entity only — non-mesh entities are refused, and children/subtrees are
+    not yet included.
 13. **Multi-scene support** — if scenes can't yet be created/switched/managed beyond a single one,
     add multi-scene support (create new scenes, switch the active scene, list them in the editor).
 14. **Modern ImGui theme** — ~~if it's possible to restyle the ImGui UI, give it a nicer, more modern
