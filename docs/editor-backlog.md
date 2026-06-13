@@ -51,5 +51,10 @@ User-reported issues and requests (2026-06-13), plus previously deferred follow-
 - `spliti build --wasm` polish
 - Resource snapshot in play mode (beyond the game camera, which is restored)
 - System order edits via srcmodel
-- Inspector multi-edit of common components
+- ~~Inspector multi-edit of common components~~ **Done.** With a multi-selection, an inspector
+  edit to the primary now copies the new component value onto every other selected entity that
+  has that component, batched into one undo step (`commitComponentEdit` in editor/inspector.go).
+  `Transform3D` is excluded — an absolute copy would collapse the selection onto one spot, and
+  multi-transform is already the viewport gizmo's job (it applies a world-space delta, not an
+  absolute value). The header hint now reads "N selected - edits apply to all (Transform: primary only)".
 - Persist-play-edits toggle

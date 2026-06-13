@@ -188,6 +188,49 @@ func TestCmdSetComponentWritesOverrideLine(t *testing.T) {
 	}
 }
 
+func TestCommitComponentEditMultiSelect(t *testing.T) {
+	c, st := newCmdEditor(t)
+	crate1, _ := entityByInstance(c, "crate1")
+	ground, _ := entityByInstance(c, "ground")
+	ti := st.reg.Lookup("Health")
+	ti.Add(c.World(), crate1)
+	ti.Add(c.World(), ground)
+
+	// Selecting both, an inspector edit on the primary (crate1) propagates the
+	// same value to every other selected entity that has the component.
+	st.sel = []ecs.Entity{crate1, ground}
+	want := Health{Max: 80, Current: 20}
+	before := ti.Value(c.World(), crate1) // pre-edit snapshot, as the gesture pins
+	ti.SetValue(c.World(), crate1, want)  // widget wrote into the primary's storage
+	st.commitComponentEdit(c, crate1, "crate1", ti, before)
+
+	if got := ti.Value(c.World(), crate1).(Health); got != want {
+		t.Fatalf("primary live = %+v", got)
+	}
+	if got := ti.Value(c.World(), ground).(Health); got != want {
+		t.Fatalf("multi-edit did not reach ground: %+v", got)
+	}
+	src := modelSrc(t, st)
+	if !strings.Contains(src, "scene.Set(c, crate1, components.Health{Max: 80, Current: 20})") {
+		t.Fatalf("crate1 override missing:\n%s", src)
+	}
+	if !strings.Contains(src, "scene.Set(c, ground, components.Health{Max: 80, Current: 20})") {
+		t.Fatalf("ground override missing:\n%s", src)
+	}
+
+	// One undo reverts the whole batch.
+	st.undoLast(c)
+	if got := ti.Value(c.World(), crate1).(Health); got != (Health{}) {
+		t.Fatalf("undo primary = %+v", got)
+	}
+	if got := ti.Value(c.World(), ground).(Health); got != (Health{}) {
+		t.Fatalf("undo ground = %+v", got)
+	}
+	if strings.Contains(modelSrc(t, st), "components.Health{Max") {
+		t.Fatalf("undo left an override line:\n%s", modelSrc(t, st))
+	}
+}
+
 func TestCmdAddRemoveComponent(t *testing.T) {
 	c, st := newCmdEditor(t)
 	e, _ := entityByInstance(c, "ground")

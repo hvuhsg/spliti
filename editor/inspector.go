@@ -37,7 +37,7 @@ func drawInspector(c *app.Ctx, st *state) {
 		imgui.TextDisabled("(unnamed entity - edits are live-only)")
 	}
 	if n := len(st.sel); n > 1 {
-		imgui.TextDisabled(fmt.Sprintf("%d selected - editing the primary", n))
+		imgui.TextDisabled(fmt.Sprintf("%d selected - edits apply to all (Transform: primary only)", n))
 	}
 	imgui.Separator()
 
@@ -178,7 +178,11 @@ func (fc fieldCtx) commitNow() {
 	fc.st.commitComponentEdit(fc.c, fc.e, fc.inst, fc.ti, fc.pre)
 }
 
-// commitComponentEdit pushes the finished gesture as one undo command.
+// commitComponentEdit pushes the finished gesture as one undo command. With a
+// multi-selection, the primary's new value is copied onto every other selected
+// entity that shares the component, batched into a single undo step — except
+// Transform3D, whose absolute copy would collapse the selection onto one spot
+// (multi-transform is the viewport gizmo's job, applied as a world-space delta).
 func (st *state) commitComponentEdit(c *app.Ctx, e ecs.Entity, inst string, ti *registry.TypeInfo, before any) {
 	after := ti.Value(c.World(), e)
 	if reflect.DeepEqual(before, after) {
@@ -192,7 +196,21 @@ func (st *state) commitComponentEdit(c *app.Ctx, e ecs.Entity, inst string, ti *
 		})
 		return
 	}
-	st.push(c, st.newSetComponent(inst, e, ti, before, after))
+	cmds := []editorCmd{st.newSetComponent(inst, e, ti, before, after)}
+	if len(st.sel) > 1 {
+		w := c.World()
+		for _, other := range st.sel {
+			if other == e || !w.Alive(other) || !ti.Has(w, other) {
+				continue
+			}
+			ob := ti.Value(w, other)
+			if reflect.DeepEqual(ob, after) {
+				continue
+			}
+			cmds = append(cmds, st.newSetComponent(instanceName(c, other), other, ti, ob, after))
+		}
+	}
+	st.push(c, batch("edit "+ti.Name, cmds))
 }
 
 // drawAddComponent is the "+ Add Component" button with a filterable popup of
