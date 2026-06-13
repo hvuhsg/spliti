@@ -212,24 +212,6 @@ func projectionLabel(ortho bool) string {
 	return "Perspective"
 }
 
-// addCamera spawns a camera posed at the current editor view and makes it the
-// active one — "create a camera from what I'm looking at". The new instance and
-// the deactivation of any prior active camera are two undo steps.
-func (st *state) addCamera(c *app.Ctx) {
-	if st.mode != modeEdit {
-		st.status("add camera is disabled during play")
-		return
-	}
-	t := render3d.XForm()
-	if cam := st.edCam; cam != nil {
-		t = t.At(cam.Position.X, cam.Position.Y, cam.Position.Z).Facing(cam.Target.Sub(cam.Position))
-	}
-	e, ok := st.spawnPrefabT(c, builtinCameraPrefab, t)
-	if ok {
-		st.makeActiveCamera(c, e)
-	}
-}
-
 // makeActiveCamera makes target the sole active camera: it sets target's Active
 // true and every other camera's false, batched into one undo step. The drive
 // system (render3d.applyCameraEntity) then renders the Game view from target.

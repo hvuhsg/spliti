@@ -155,6 +155,9 @@ type state struct {
 	// export (build a shippable game artifact from the toolbar)
 	export exportState
 
+	// native macOS "File" menu item handles (zero value / inert off darwin)
+	menu fileMenu
+
 	// console
 	console           console
 	consoleAutoScroll bool
@@ -207,6 +210,11 @@ func (p Plugin) Build(a *app.App) {
 	st := newState(p)
 	app.InsertResource(a, st)
 
+	// render3d.Build (registered first) has already created the window and its
+	// Cocoa menu bar, so the native "File" menu can be installed now. Off
+	// darwin this is a no-op and the commands stay in the in-app menu bar.
+	st.buildNativeMenu(a.Ctx())
+
 	// Game systems register through an interceptor that records them for the
 	// Systems panel and gates each behind Play mode (and its panel toggle).
 	if p.GameSystems != nil {
@@ -257,7 +265,7 @@ func (p Plugin) Build(a *app.App) {
 		drawCameraIcons(c, st)
 		drawColliderBoxes(c)
 	})
-	a.AddSystems(schedule.First, drainWatcher, checkRebuild, checkExport)
+	a.AddSystems(schedule.First, drainWatcher, checkRebuild, checkExport, menuTick)
 	a.AddSystems(schedule.Update, editorUI)
 	// stepClock must run after the game's own Last systems; it is registered
 	// later, and same-stage order follows insertion order.

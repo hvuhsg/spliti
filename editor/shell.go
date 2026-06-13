@@ -7,6 +7,7 @@ import (
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/editor/gizmo"
+	"github.com/hvuhsg/spliti/plugin/macmenu"
 )
 
 // drawShell lays the fullscreen dock host with the menu/tool bar and builds
@@ -63,29 +64,28 @@ func drawShell(c *app.Ctx, st *state) {
 		} else {
 			imgui.EndDisabled()
 		}
-		imgui.Separator()
-
-		editing := st.mode == modeEdit
-		if !editing {
-			imgui.BeginDisabled()
+		// On macOS these commands live in the native "File" menu (see
+		// nativemenu.go); elsewhere they stay here as toolbar buttons.
+		if !macmenu.Available() {
+			imgui.Separator()
+			editing := st.mode == modeEdit
+			if !editing {
+				imgui.BeginDisabled()
+			}
+			if imgui.Button("Save") {
+				st.saveNow(c, true)
+			}
+			imgui.SetItemTooltip("Write pending changes to the scene file now (Ctrl+S)")
+			if imgui.Button("Reload") {
+				reloadScene(c, st)
+			}
+			imgui.SetItemTooltip("Re-read the scene file from disk and sync the live world to it")
+			if !editing {
+				imgui.EndDisabled()
+			}
+			imgui.Separator()
+			exportControls(st)
 		}
-		if imgui.Button("Save") {
-			st.saveNow(c, true)
-		}
-		imgui.SetItemTooltip("Write pending changes to the scene file now (Ctrl+S)")
-		if imgui.Button("Reload") {
-			reloadScene(c, st)
-		}
-		imgui.SetItemTooltip("Re-read the scene file from disk and sync the live world to it")
-		if imgui.Button("Add Camera") {
-			st.addCamera(c)
-		}
-		imgui.SetItemTooltip("Add a Camera entity posed at the current editor view and make it active")
-		if !editing {
-			imgui.EndDisabled()
-		}
-		imgui.Separator()
-		exportControls(st)
 		if st.rebuildNeeded || st.rebuild.running.Load() {
 			imgui.Separator()
 			rebuildBanner(c, st)
