@@ -208,23 +208,24 @@ func followsSelected(c *app.Ctx, st *state, e ecs.Entity) bool {
 	return false
 }
 
-// pickEntity resolves a pick ray to the nearest entity: mesh raycast and
-// light-icon spheres compete by distance, so meshless lights are selectable.
+// pickEntity resolves a pick ray to the nearest entity: the mesh raycast and the
+// light- and camera-icon spheres all compete by distance, so meshless lights and
+// cameras are selectable alongside drawn geometry.
 func pickEntity(c *app.Ctx, origin, dir m.Vec3) (ecs.Entity, bool) {
-	hit, hitOK := render3d.Raycast(c, origin, dir)
-	light, lightT, lightOK := pickLight(c, origin, dir)
-	switch {
-	case hitOK && lightOK:
-		if lightT < hit.Dist {
-			return light, true
+	var best ecs.Entity
+	var bestT float32
+	found := false
+	consider := func(e ecs.Entity, t float32, ok bool) {
+		if ok && (!found || t < bestT) {
+			best, bestT, found = e, t, true
 		}
-		return hit.Entity, true
-	case hitOK:
-		return hit.Entity, true
-	case lightOK:
-		return light, true
 	}
-	return ecs.Entity{}, false
+	if hit, ok := render3d.Raycast(c, origin, dir); ok {
+		consider(hit.Entity, hit.Dist, true)
+	}
+	consider(pickLight(c, origin, dir))
+	consider(pickCamera(c, origin, dir))
+	return best, found
 }
 
 // localize re-expresses a world matrix in the entity's parent space (parents
@@ -246,11 +247,27 @@ func localize(c *app.Ctx, e ecs.Entity, model m.Mat4) m.Mat4 {
 	return model
 }
 
+// prefabLabel is the short human label for a prefab's written form: the function
+// name with its package qualifier and the Spawn prefix dropped
+// ("entities.SpawnCrate" -> "Crate", "render3d.SpawnCamera" -> "Camera").
+func prefabLabel(prefab string) string {
+	name := prefab
+	if i := strings.LastIndexByte(name, '.'); i >= 0 {
+		name = name[i+1:]
+	}
+	return strings.TrimPrefix(name, "Spawn")
+}
+
 // spawnPrefab pushes a spawn command placing a new instance of the prefab at
 // the given world point.
 func (st *state) spawnPrefab(c *app.Ctx, prefab string, at m.Vec3) {
-	base := strings.TrimPrefix(prefab, "entities.")
-	base = strings.TrimPrefix(base, "Spawn")
+	st.spawnPrefabT(c, prefab, render3d.XForm().At(at.X, at.Y, at.Z))
+}
+
+// spawnPrefabT spawns a prefab instance at an explicit transform, naming it from
+// the prefab label, selecting it, and returning the live entity.
+func (st *state) spawnPrefabT(c *app.Ctx, prefab string, t render3d.Transform3D) (ecs.Entity, bool) {
+	base := prefabLabel(prefab)
 	if base == "" {
 		base = "instance"
 	}
@@ -261,11 +278,12 @@ func (st *state) spawnPrefab(c *app.Ctx, prefab string, at m.Vec3) {
 	} else if sc := st.scene(); sc != nil && sc.Spawn(name) != nil {
 		name = st.freeInstanceName(c, base)
 	}
-	cmd := &cmdSpawn{instance: name, prefab: prefab, t: render3d.XForm().At(at.X, at.Y, at.Z)}
-	st.push(c, cmd)
-	if e, ok := entityByInstance(c, name); ok {
+	st.push(c, &cmdSpawn{instance: name, prefab: prefab, t: t})
+	e, ok := entityByInstance(c, name)
+	if ok {
 		st.selectOne(e)
 	}
+	return e, ok
 }
 
 // spawnPointFallback is where double-click spawns land.

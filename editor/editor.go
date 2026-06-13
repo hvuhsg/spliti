@@ -185,6 +185,7 @@ func newState(p Plugin) *state {
 		reg = registry.New()
 		registry.Builtin(reg)
 	}
+	p.Prefabs = withBuiltinPrefabs(p.Prefabs)
 	return &state{
 		cfg:               p,
 		reg:               reg,
@@ -253,6 +254,7 @@ func (p Plugin) Build(a *app.App) {
 		drawGrid(c)
 		drawSelectionBox(c, st)
 		drawLightIcons(c, st)
+		drawCameraIcons(c, st)
 		drawColliderBoxes(c)
 	})
 	a.AddSystems(schedule.First, drainWatcher, checkRebuild, checkExport)

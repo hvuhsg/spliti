@@ -127,3 +127,20 @@ func NewDirectionalLight(c *app.Ctx, t Transform3D, light DirectionalLight) ecs.
 	mp := generic.NewMap3[Transform3D, GlobalTransform, DirectionalLight](c.World())
 	return mp.NewWith(&t, &GlobalTransform{Matrix: m.Identity4()}, &light)
 }
+
+// NewCamera creates a camera entity immediately and returns it — the
+// prefab-friendly form. The camera looks along the transform's forward (-Z)
+// axis, so build t with EulerDeg or Facing to aim it. When cam.Active the
+// entity drives the Camera3D resource (see Camera).
+func NewCamera(c *app.Ctx, t Transform3D, cam Camera) ecs.Entity {
+	mp := generic.NewMap3[Transform3D, GlobalTransform, Camera](c.World())
+	return mp.NewWith(&t, &GlobalTransform{Matrix: m.Identity4()}, &cam)
+}
+
+// SpawnCamera is the prefab-shaped (func(c, t) ecs.Entity) camera the editor
+// spawns when adding a camera to a scene: a camera entity at t with a default
+// perspective projection, Active so it immediately drives the view. It looks
+// along the transform's forward (-Z) axis.
+func SpawnCamera(c *app.Ctx, t Transform3D) ecs.Entity {
+	return NewCamera(c, t, Camera{FovYDeg: 60, Near: 0.1, Far: 1000, OrthoSize: 10, Active: true})
+}

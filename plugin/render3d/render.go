@@ -16,6 +16,7 @@ import (
 const (
 	inputLabel     = "__render3d_input"
 	transformLabel = "__render3d_transform"
+	cameraLabel    = "__render3d_camera"
 	frameLabel     = "__render3d_frame"
 	renderLabel    = "__render3d_render"
 	gizmoLabel     = "__render3d_gizmo"
@@ -57,6 +58,8 @@ func installSystems(a *app.App) {
 	a.AddSystems(schedule.PostUpdate,
 		app.System(propagateTransforms).Label(transformLabel).Before(renderLabel))
 	a.AddSystems(schedule.PostUpdate,
+		app.System(applyCameraEntity).Label(cameraLabel).After(transformLabel).Before(frameLabel))
+	a.AddSystems(schedule.PostUpdate,
 		app.System(writeFrameUniforms).Label(frameLabel).Before(renderLabel).After(transformLabel))
 	a.AddSystems(schedule.PostUpdate, app.System(renderSystem).Label(renderLabel))
 	a.AddSystems(schedule.PostUpdate,
@@ -67,6 +70,52 @@ func installSystems(a *app.App) {
 		app.System(drawOverlay2D).Label(overlayLabel).After(sceneEndLabel).Before(presentLabel))
 	a.AddSystems(schedule.PostUpdate,
 		app.System(presentSystem).Label(presentLabel).After(renderLabel))
+}
+
+// applyCameraEntity lets a Camera entity drive the Camera3D resource: the active
+// camera's world transform becomes the resource's eye/target/up and its
+// projection params overwrite the resource's, so the renderer and game see the
+// posed entity. Runs after transform propagation (the matrix is current) and
+// before writeFrameUniforms (the resource it writes is read there). Among
+// several active cameras the last queried wins; with none active the resource is
+// left untouched, so a scene- or game-driven camera keeps working unchanged.
+func applyCameraEntity(c *app.Ctx) {
+	res := app.GetResource[Camera3D](c)
+	if res == nil {
+		return
+	}
+	var (
+		cam   Camera
+		mat   m.Mat4
+		found bool
+	)
+	app.Query2[Camera, GlobalTransform](c, func(_ ecs.Entity, cm *Camera, gt *GlobalTransform) {
+		if cm.Active {
+			cam, mat, found = *cm, gt.Matrix, true
+		}
+	})
+	if !found {
+		return
+	}
+	pos := m.Vec3{X: mat[12], Y: mat[13], Z: mat[14]}
+	res.Position = pos
+	res.Target = pos.Add(Forward(mat))
+	if up := (m.Vec3{X: mat[4], Y: mat[5], Z: mat[6]}).Normalize(); up != (m.Vec3{}) {
+		res.Up = up
+	}
+	res.Ortho = cam.Orthographic
+	if cam.FovYDeg > 0 {
+		res.FovYDeg = cam.FovYDeg
+	}
+	if cam.OrthoSize > 0 {
+		res.OrthoHeight = cam.OrthoSize
+	}
+	if cam.Near > 0 {
+		res.Near = cam.Near
+	}
+	if cam.Far > cam.Near {
+		res.Far = cam.Far
+	}
 }
 
 // writeFrameUniforms builds the camera + light data and uploads it to the GPU

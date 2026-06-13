@@ -176,6 +176,23 @@ func Perspective(fovY, aspect, near, far float32) Mat4 {
 	return r
 }
 
+// Ortho builds a right-handed orthographic projection mapping the box
+// [left,right]x[bottom,top]x[-near,-far] (view space, camera looking down -Z) to
+// WebGPU/Metal clip space: x,y -> [-1,1] and z -> [0,1] (near->0, far->1). No
+// perspective divide (w stays 1). near/far are positive distances, matching
+// Perspective.
+func Ortho(left, right, bottom, top, near, far float32) Mat4 {
+	var r Mat4
+	r[0] = 2 / (right - left)
+	r[5] = 2 / (top - bottom)
+	r[10] = -1 / (far - near)
+	r[12] = -(right + left) / (right - left)
+	r[13] = -(top + bottom) / (top - bottom)
+	r[14] = -near / (far - near)
+	r[15] = 1
+	return r
+}
+
 // LookAt builds a right-handed view matrix placing the camera at eye, looking
 // toward target, with the given up direction. World space is transformed into
 // the camera's space (camera at origin, looking down -Z).

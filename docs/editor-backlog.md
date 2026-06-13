@@ -4,11 +4,29 @@ User-reported issues and requests (2026-06-13), plus previously deferred follow-
 
 ## Reported issues
 
-1. **Camera entity support** — no camera icon in the scene viewport to select/move, and no way
-   to add another camera to the scene or choose which one is the default/active camera.
-   (Today the game camera is a global `Camera3D` resource, not an entity — this likely needs a
-   camera *component* or editor affordance for posing the resource, plus an icon billboard like
-   the light icons and picking for it.)
+1. **Camera entity support** — ~~no camera icon in the scene viewport to select/move, and no way
+   to add another camera to the scene or choose which one is the default/active camera.~~
+   **Done.** Added a `render3d.Camera` component (`FovYDeg`/`Near`/`Far`/`Active`): a camera entity
+   poses the view from its transform — eye at the world translation, looking down forward (`-Z`),
+   `+Y` as up — so the gizmo moves/aims it like a light. A new `applyCameraEntity` system
+   (render.go, scheduled after transform propagation and before `writeFrameUniforms`) copies the
+   *active* camera entity into the global `Camera3D` resource each frame, so the Game panel and a
+   shipped game both render what the entity frames; with no active camera the resource is left
+   untouched (scene/game-driven cameras keep working). Among several active cameras the last
+   queried wins, and the editor keeps exactly one active. `NewCamera`/`SpawnCamera` spawn helpers;
+   `SpawnCamera` is injected as a builtin prefab (`render3d.SpawnCamera`) so it's drag-spawnable
+   from Assets and writes a compiling `scene.Spawn` line. Editor affordances: a cyan view-frustum
+   icon per camera (brighter when active) with ray-sphere picking (editor/cameraentity.go, wired
+   into `pickEntity`); an "Add Camera" toolbar button that spawns a camera posed at the current
+   editor view and makes it active; and an inspector "Make active" button (single-active is
+   editor-managed, batched as one undo step) in place of a raw `Active` checkbox. The viewport
+   glyph is a small camera-body box at the eye plus a view volume — a converging cone for a
+   perspective camera, a parallel box for an orthographic one. **Projections:** `Camera3D` and the
+   `Camera` component gained orthographic support alongside perspective (`m.Ortho`, matching the
+   column-major `[0,1]`-depth `-Z` convention); the inspector has a Perspective/Orthographic picker
+   that swaps the `FovYDeg` / `OrthoSize` field, and `applyCameraEntity` copies the mode through to
+   the resource. Resource-driving and the ortho matrix mapping are unit-tested (pose + projection
+   copy, inactive-leaves-resource, last-active-wins, ortho drive + near/far/edge clip mapping).
 2. **Light direction should follow transform** — ~~moving/rotating a light entity in the viewport
    should update its direction, not just its position.~~ **Done.** Removed `DirectionalLight.Direction`
    entirely: a directional light now casts along its transform's forward (`-Z`) world axis, computed

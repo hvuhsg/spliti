@@ -15,6 +15,7 @@ func Builtin(r *Registry) {
 	Register[render3d.InstanceColor](r, "InstanceColor", "render3d")
 	Register[render3d.PointLight](r, "PointLight", "render3d")
 	Register[render3d.DirectionalLight](r, "DirectionalLight", "render3d")
+	Register[render3d.Camera](r, "Camera", "render3d")
 	Register[render3d.Parent](r, "Parent", "render3d")
 	Register[render3d.GlobalTransform](r, "GlobalTransform", "render3d")
 	Register[scene.Name](r, "Name", "scene")

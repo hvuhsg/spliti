@@ -77,6 +77,10 @@ func drawShell(c *app.Ctx, st *state) {
 			reloadScene(c, st)
 		}
 		imgui.SetItemTooltip("Re-read the scene file from disk and sync the live world to it")
+		if imgui.Button("Add Camera") {
+			st.addCamera(c)
+		}
+		imgui.SetItemTooltip("Add a Camera entity posed at the current editor view and make it active")
 		if !editing {
 			imgui.EndDisabled()
 		}

@@ -175,3 +175,25 @@ type PointLight struct {
 	Intensity float32
 	Range     float32
 }
+
+// Camera marks an entity as a scene camera. The entity poses the view: the eye
+// sits at its GlobalTransform translation and looks along the forward (-Z) axis,
+// with the transform's up (+Y) axis as the view up — so moving or rotating the
+// entity (gizmo, animation, a Facing transform) aims the camera. When Active,
+// the entity drives the global Camera3D resource each frame (the camera the
+// renderer and game read); among several Active cameras the last queried wins,
+// so the editor keeps exactly one active. FovYDeg, Near, and Far are the
+// projection parameters; aspect is supplied by the render target, not the
+// entity. A non-positive size field leaves the resource's current value, so a
+// zero-valued Camera means "pose only, keep the resource's projection".
+//
+// Projection is perspective by default (FovYDeg). Set Orthographic for an
+// orthographic projection sized by OrthoSize (the visible world height).
+type Camera struct {
+	FovYDeg      float32
+	Near         float32
+	Far          float32
+	Orthographic bool
+	OrthoSize    float32
+	Active       bool
+}

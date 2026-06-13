@@ -91,6 +91,10 @@ func drawComponent(c *app.Ctx, st *state, e ecs.Entity, inst string, ti *registr
 		drawColliderFields(fc, comp)
 		return
 	}
+	if ti.Name == "Camera" {
+		drawCameraFields(fc, comp)
+		return
+	}
 	for _, f := range ti.Fields {
 		if keys, ok := assetRefKeys(c, ti.Name, f.Name); ok {
 			drawAssetRefField(fc, f.Name, f.Value(comp), keys)

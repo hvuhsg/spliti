@@ -2,7 +2,6 @@ package editor
 
 import (
 	"sort"
-	"strings"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/hvuhsg/spliti/app"
@@ -32,8 +31,7 @@ func drawAssets(c *app.Ctx, st *state) {
 	imgui.TextDisabled("prefabs - drag into the scene")
 	imgui.Separator()
 	for _, name := range names {
-		label := strings.TrimPrefix(name, "entities.")
-		label = strings.TrimPrefix(label, "Spawn")
+		label := prefabLabel(name)
 		imgui.SelectableBool(label)
 		if imgui.BeginDragDropSource() {
 			st.dragPrefab = name

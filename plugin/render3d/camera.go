@@ -8,8 +8,12 @@ import (
 
 // Camera3D is the active view into the scene, a resource (one camera for this
 // foundation). Position is the eye, Target the look-at point, Up the world up
-// hint. FovYDeg is the vertical field of view in degrees; Near/Far are the clip
-// distances. aspect (width/height) is maintained by the resize handler.
+// hint. Near/Far are the clip distances. aspect (width/height) is maintained by
+// the resize handler.
+//
+// Projection is perspective by default (FovYDeg = vertical field of view in
+// degrees). Set Ortho for an orthographic projection instead, sized by
+// OrthoHeight (the visible world height; width follows the aspect ratio).
 //
 // Games drive the camera by mutating these fields (often each frame); the
 // renderer rebuilds the view/projection from them in writeFrameUniforms.
@@ -21,6 +25,11 @@ type Camera3D struct {
 	FovYDeg float32
 	Near    float32
 	Far     float32
+
+	// Ortho switches to an orthographic projection sized by OrthoHeight (world
+	// units, vertical). FovYDeg is ignored while Ortho is set.
+	Ortho       bool
+	OrthoHeight float32
 
 	aspect float32
 }
@@ -34,16 +43,12 @@ func (c *Camera3D) View() m.Mat4 {
 	return m.LookAt(c.Position, c.Target, up)
 }
 
-// Projection returns the camera-to-clip perspective matrix using the current
-// aspect ratio.
+// Projection returns the camera-to-clip matrix using the current aspect ratio:
+// orthographic when Ortho is set (sized by OrthoHeight), perspective otherwise.
 func (c *Camera3D) Projection() m.Mat4 {
 	aspect := c.aspect
 	if aspect <= 0 {
 		aspect = 1
-	}
-	fov := c.FovYDeg
-	if fov <= 0 {
-		fov = 60
 	}
 	near, far := c.Near, c.Far
 	if near <= 0 {
@@ -51,6 +56,18 @@ func (c *Camera3D) Projection() m.Mat4 {
 	}
 	if far <= near {
 		far = near + 1000
+	}
+	if c.Ortho {
+		h := c.OrthoHeight
+		if h <= 0 {
+			h = 10
+		}
+		w := h * aspect
+		return m.Ortho(-w/2, w/2, -h/2, h/2, near, far)
+	}
+	fov := c.FovYDeg
+	if fov <= 0 {
+		fov = 60
 	}
 	return m.Perspective(m.DegToRad(fov), aspect, near, far)
 }
