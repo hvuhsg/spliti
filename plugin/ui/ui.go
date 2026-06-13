@@ -34,6 +34,31 @@ func Scale(c *app.Ctx) float32 {
 	return b.uiScale
 }
 
+// MonoFont returns the embedded monospace font (JetBrains Mono) for panels that
+// need fixed-width glyphs with broad coverage (box-drawing, braille, symbols)
+// the default font lacks — the editor terminal. Push it with imgui.PushFont.
+// Returns nil if the font asset failed to load (callers fall back to default).
+func MonoFont(c *app.Ctx) *imgui.Font {
+	b := app.GetResource[Backend](c)
+	if b == nil {
+		return nil
+	}
+	return b.monoFont
+}
+
+// FrameRunes returns the characters typed this frame, captured before ImGui
+// consumed them. It lets a panel that is not a text widget (the editor terminal)
+// read raw typed text while focused. The slice is owned by the backend and valid
+// only for the current frame; copy it if you need to retain it. Returns nil
+// before the UI is ready.
+func FrameRunes(c *app.Ctx) []rune {
+	b := app.GetResource[Backend](c)
+	if b == nil {
+		return nil
+	}
+	return b.frameRunes
+}
+
 // RegisterTexture makes an existing wgpu texture view drawable inside ImGui (via
 // imgui.ImageWithBg / imgui.Image), returning a TextureID to pass as the image
 // handle. The caller retains ownership of the view; the returned id stays valid

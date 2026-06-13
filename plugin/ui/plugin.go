@@ -52,8 +52,13 @@ func (p Plugin) Build(a *app.App) {
 	// base-vertex offsets; advertise both so ImGui drives the modern paths.
 	io.SetBackendFlags(imgui.BackendFlagsRendererHasTextures | imgui.BackendFlagsRendererHasVtxOffset)
 
+	// Add the default font first so it stays the rest of the UI's font, then the
+	// embedded monospace font for the Terminal panel to push.
+	io.Fonts().AddFontDefault()
+
 	b := newBackend()
 	b.wantScale = p.Scale
+	b.monoFont = loadMonoFont(io.Fonts(), monoFontSize)
 	app.InsertResource(a, b)
 
 	render3d.AddAfterInput(a, beginFrame)
