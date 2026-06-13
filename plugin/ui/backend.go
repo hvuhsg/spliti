@@ -64,6 +64,11 @@ type Backend struct {
 	textures  map[imgui.TextureID]*texEntry
 	nextTexID uint64
 
+	// atlas tracks ImGui-managed font-atlas textures by their ImGui UniqueID
+	// (cimgui-go's DrawData.Textures()/TexList() only expose index 0 correctly,
+	// so we drive everything off io.Fonts().TexData() instead — see updateTextures).
+	atlas map[int32]atlasRec
+
 	// UI scale (font + style) applied once on the first frame. wantScale is the
 	// caller's override (0 = auto from the window content scale); uiScale is the
 	// value actually applied, exposed via Scale.
@@ -85,8 +90,21 @@ type Backend struct {
 	monoFont *imgui.Font
 }
 
+// atlasRec links an ImGui font-atlas texture (by UniqueID) to the GPU texture id
+// we registered for it, keeping the ImTextureData handle so we can poll its
+// status to destroy it once ImGui reports it unused.
+type atlasRec struct {
+	id     imgui.TextureID
+	handle imgui.TextureData
+}
+
 func newBackend() *Backend {
-	return &Backend{textures: make(map[imgui.TextureID]*texEntry), nextTexID: 1, uiScale: 1}
+	return &Backend{
+		textures:  make(map[imgui.TextureID]*texEntry),
+		atlas:     make(map[int32]atlasRec),
+		nextTexID: 1,
+		uiScale:   1,
+	}
 }
 
 func (b *Backend) release() {
@@ -94,6 +112,7 @@ func (b *Backend) release() {
 		t.release()
 	}
 	b.textures = nil
+	b.atlas = nil
 	for _, r := range []interface{ Release() }{
 		b.vbuf, b.ibuf, b.uniformBuf, b.group0, b.sampler, b.bgl0, b.bgl1, b.pipeline,
 	} {
@@ -306,8 +325,8 @@ func (b *Backend) render(c *app.Ctx, dd *imgui.DrawData) {
 	}
 	queue := render3d.Queue(c)
 
-	// 1) Satisfy ImGui's texture lifecycle (font atlas + any user textures).
-	b.updateTextures(c, dd)
+	// 1) Satisfy ImGui's texture lifecycle (the font atlas).
+	b.updateTextures(c)
 
 	// 2) Concatenate every command list's vertices/indices into one upload. With
 	// RendererHasVtxOffset each draw uses a base-vertex, so list-local 16-bit
@@ -394,38 +413,63 @@ func (b *Backend) render(c *app.Ctx, dd *imgui.DrawData) {
 	pass.SetScissorRect(0, 0, uint32(fbW), uint32(fbH))
 }
 
-// updateTextures walks DrawData.Textures and creates/updates/destroys GPU
-// textures to match ImGui's requests (the 1.92+ dynamic texture protocol).
-func (b *Backend) updateTextures(c *app.Ctx, dd *imgui.DrawData) {
-	for _, td := range dd.Textures().Slice() {
-		// ImGui leaves nil slots in the texture list while it swaps the font
-		// atlas (e.g. when the terminal font is resized, the old atlas texture is
-		// destroyed and a new one created). Any method call on a nil-backed entry
-		// dereferences a null C pointer and segfaults, so skip them.
-		if td.CData == nil {
+// updateTextures satisfies ImGui's 1.92 dynamic-texture protocol for the font
+// atlas. cimgui-go v1.5.0's DrawData.Textures()/FontAtlas.TexList() Slice wrapper
+// only exposes index 0 correctly (it reads garbage past the first element), so
+// during a font-atlas swap — e.g. resizing the terminal font with Cmd/Ctrl +/- —
+// the new current texture (at index 1) is invisible there and would never get a
+// texid, asserting at draw time. Instead we drive creation off the authoritative
+// current texture, io.Fonts().TexData(), and track the rest by ImGui UniqueID.
+// The only ImGui-managed textures are the atlas's; user textures (RegisterTexture)
+// are independent.
+func (b *Backend) updateTextures(c *app.Ctx) {
+	cur := imgui.CurrentIO().Fonts().TexData()
+	curUID := int32(-1)
+	if cur != nil && cur.CData != nil {
+		curUID = cur.UniqueID()
+		b.ensureAtlas(c, cur)
+	}
+	// Destroy superseded atlas textures, but only once ImGui reports them unused:
+	// a texture can be WantDestroy while still referenced by the current frame's
+	// draws, and zeroing its id then would assert.
+	for uid, rec := range b.atlas {
+		if uid == curUID || rec.handle.CData == nil {
 			continue
 		}
-		switch td.Status() {
-		case imgui.TextureStatusWantCreate:
-			b.createTexture(c, &td)
-		case imgui.TextureStatusWantUpdates:
-			b.uploadPixels(c, b.textures[td.TexID()], &td)
-			td.SetStatus(imgui.TextureStatusOK)
-		case imgui.TextureStatusWantDestroy:
-			id := td.TexID()
-			if te := b.textures[id]; te != nil {
+		if rec.handle.Status() == imgui.TextureStatusWantDestroy && rec.handle.UnusedFrames() > 0 {
+			if te := b.textures[rec.id]; te != nil {
 				te.release()
-				delete(b.textures, id)
+				delete(b.textures, rec.id)
 			}
-			td.SetTexID(0)
-			td.SetStatus(imgui.TextureStatusDestroyed)
+			rec.handle.SetTexID(0)
+			rec.handle.SetStatus(imgui.TextureStatusDestroyed)
+			delete(b.atlas, uid)
 		}
 	}
 }
 
-func (b *Backend) createTexture(c *app.Ctx, td *imgui.TextureData) {
+// ensureAtlas makes sure the given atlas texture has a GPU texture + valid id,
+// (re)uploads its pixels when ImGui marks it dirty, and asserts the id every
+// frame (the current texture is what the draw commands reference).
+func (b *Backend) ensureAtlas(c *app.Ctx, td *imgui.TextureData) {
+	uid := td.UniqueID()
+	rec, ok := b.atlas[uid]
+	if !ok {
+		id := b.createGPUTexture(c, td.Width(), td.Height())
+		rec = atlasRec{id: id, handle: *td}
+		b.atlas[uid] = rec
+	}
+	if s := td.Status(); s == imgui.TextureStatusWantCreate || s == imgui.TextureStatusWantUpdates {
+		b.uploadPixels(c, b.textures[rec.id], td)
+		td.SetStatus(imgui.TextureStatusOK)
+	}
+	td.SetTexID(rec.id)
+}
+
+// createGPUTexture allocates a w×h RGBA texture + bind group, registers it under
+// a fresh id (the key render() looks up via cmd.TexID()), and returns the id.
+func (b *Backend) createGPUTexture(c *app.Ctx, w, h int32) imgui.TextureID {
 	dev := render3d.Device(c)
-	w, h := td.Width(), td.Height()
 	tex, err := dev.CreateTexture(&wgpu.TextureDescriptor{
 		Label:         "spliti.ui.imgui.tex",
 		Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
@@ -450,14 +494,10 @@ func (b *Backend) createTexture(c *app.Ctx, td *imgui.TextureData) {
 	if err != nil {
 		panic("ui: imgui texture bind group: " + err.Error())
 	}
-	te := &texEntry{tex: tex, view: view, bg: bg, w: w, h: h}
 	id := imgui.TextureID(b.nextTexID)
 	b.nextTexID++
-	b.textures[id] = te
-
-	b.uploadPixels(c, te, td)
-	td.SetTexID(id)
-	td.SetStatus(imgui.TextureStatusOK)
+	b.textures[id] = &texEntry{tex: tex, view: view, bg: bg, w: w, h: h}
+	return id
 }
 
 // bgl1Group creates a texture bind group (group 1 layout) for an externally
