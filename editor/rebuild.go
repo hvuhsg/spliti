@@ -82,12 +82,18 @@ func runRebuild(root string, co *console) bool {
 	return streamCommand(co, dir, "go", "build", "-o", editorBinaryPath(root), ".")
 }
 
-// streamCommand runs a command, feeding its combined output line-by-line into
-// the console as it appears.
+// streamCommand runs a command with cgo enabled, feeding its combined output
+// line-by-line into the console as it appears.
 func streamCommand(co *console, dir string, name string, args ...string) bool {
+	return streamCommandEnv(co, dir, []string{"CGO_ENABLED=1"}, name, args...)
+}
+
+// streamCommandEnv is streamCommand with caller-supplied env overlaid on the
+// process environment (e.g. GOOS=js GOARCH=wasm for the wasm export target).
+func streamCommandEnv(co *console, dir string, env []string, name string, args ...string) bool {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=1")
+	cmd.Env = append(os.Environ(), env...)
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		co.add(logError, err.Error())

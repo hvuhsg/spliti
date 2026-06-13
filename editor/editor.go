@@ -152,6 +152,9 @@ type state struct {
 	rebuild       rebuildState
 	execOnExit    string // set when a successful rebuild wants a re-exec
 
+	// export (build a shippable game artifact from the toolbar)
+	export exportState
+
 	// console
 	console           console
 	consoleAutoScroll bool
@@ -252,7 +255,7 @@ func (p Plugin) Build(a *app.App) {
 		drawLightIcons(c, st)
 		drawColliderBoxes(c)
 	})
-	a.AddSystems(schedule.First, drainWatcher, checkRebuild)
+	a.AddSystems(schedule.First, drainWatcher, checkRebuild, checkExport)
 	a.AddSystems(schedule.Update, editorUI)
 	// stepClock must run after the game's own Last systems; it is registered
 	// later, and same-stage order follows insertion order.

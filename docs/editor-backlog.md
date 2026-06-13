@@ -65,8 +65,13 @@ User-reported issues and requests (2026-06-13), plus previously deferred follow-
     `pushEditorTheme` applies it per frame via `PushStyleColor`/`PushStyleVar` and `editorUI` pops the
     exact counts it returns. (Fonts left as the ImGui default — the binding ships no alternate atlas.)
 15. **Skybox support** — add a skybox to the scene and the ability to change it.
-16. **Export option in the toolbar** — there's no export option. Add one to the top menu bar
-    alongside "Window".
+16. **Export option in the toolbar** — ~~there's no export option. Add one to the top menu bar
+    alongside "Window".~~ **Done.** Added an "Export" menu-bar button (editor/export.go) opening a
+    popup with two targets — native binary and wasm bundle — that build the same artifacts as
+    `spliti build [--wasm]`. The build runs detached with output streaming to the Console (reusing
+    `streamCommandEnv`, factored out of `streamCommand` so wasm can set `GOOS=js GOARCH=wasm`);
+    `checkExport` (schedule.First) reports the outcome. The native binary is named after the project
+    dir to avoid colliding with the scaffold's `game/` package directory.
 
 ## Previously deferred (from M4)
 

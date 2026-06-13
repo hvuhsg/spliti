@@ -80,6 +80,8 @@ func drawShell(c *app.Ctx, st *state) {
 		if !editing {
 			imgui.EndDisabled()
 		}
+		imgui.Separator()
+		exportControls(st)
 		if st.rebuildNeeded || st.rebuild.running.Load() {
 			imgui.Separator()
 			rebuildBanner(c, st)
