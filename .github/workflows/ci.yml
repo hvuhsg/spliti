@@ -1,0 +1,150 @@
+# CI for the spliti game engine.
+#
+# Three independent concerns, three jobs:
+#
+#   test         - build + unit-test the whole engine (incl. the cgo GPU
+#                  renderer: glfw/OpenGL + Dear ImGui/cimgui-go) on Linux and
+#                  macOS. The GPU tests here are CPU-only math/packing/parsing,
+#                  so they pass headless; no GPU device is created.
+#   build-matrix - cross-compile a real game to many OS/arch combos with
+#                  CGO_ENABLED=0, proving the pure-Go runtime ports everywhere.
+#   build-wasm   - build the WebGPU demos for GOOS=js GOARCH=wasm.
+#
+# Windows is intentionally absent from `test`: full cgo there means a MinGW C++
+# build of cimgui-go + glfw, which is slow and brittle on the hosted runners.
+# Windows binaries are still validated by build-matrix (windows/amd64, /arm64,
+# /386 cross-compile cleanly with CGO_ENABLED=0).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a branch cancels the previous in-flight run for that ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ----------------------------------------------------------------------------
+  # Engine build + unit tests, with the cgo GPU stack, on Linux and macOS.
+  # ----------------------------------------------------------------------------
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # Caches the module download + build cache keyed on go.sum.
+          cache: true
+
+      # glfw needs OpenGL + X11 dev headers; cimgui-go needs a C++ compiler
+      # (g++ is preinstalled); oto needs ALSA dev headers for the Linux backend.
+      - name: Install system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc g++ pkg-config \
+            libgl1-mesa-dev xorg-dev \
+            libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libxxf86vm-dev \
+            libasound2-dev
+
+      - name: go build ./...
+        run: go build ./...
+
+      - name: go vet ./...
+        run: go vet ./...
+
+      - name: go test ./...
+        run: go test -count=1 ./...
+
+  # ----------------------------------------------------------------------------
+  # Cross-compile a game to many architectures and operating systems.
+  #
+  # Built with CGO_ENABLED=0 so a single Linux host can target everything with
+  # no cross C-toolchain. The games chosen are the audio-free terminal games
+  # (the only Linux-cgo dependency in the engine is ALSA via oto, which only the
+  # audio plugin pulls in), so they are pure Go and port to any GOOS/GOARCH.
+  # ----------------------------------------------------------------------------
+  build-matrix:
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: linux,   goarch: arm }
+          - { goos: linux,   goarch: 386 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+          - { goos: windows, goarch: 386 }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: freebsd, goarch: amd64 }
+    env:
+      CGO_ENABLED: 0
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      # Pure-Go (audio-free) games that build for every target.
+      GAMES: tetris breakout doom pong pacman invaders survivors stick-fight stick-fight-ai snake-net
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Cross-compile games
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ext=""
+          [ "$GOOS" = "windows" ] && ext=".exe"
+          for g in $GAMES; do
+            echo "==> $GOOS/$GOARCH: $g"
+            go build -o "dist/${g}-${GOOS}-${GOARCH}${ext}" "./examples/$g"
+          done
+          ls -lh dist
+
+  # ----------------------------------------------------------------------------
+  # WebAssembly build of the WebGPU demos (GOOS=js GOARCH=wasm).
+  # ----------------------------------------------------------------------------
+  build-wasm:
+    name: build wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build wasm demos
+        run: bash scripts/build-wasm.sh
+
+      - name: Check artifacts exist
+        run: |
+          set -euo pipefail
+          test -f web/dist/wasm_exec.js
+          for demo in gpu-demo render3d-demo radio radio3d radiosim; do
+            test -s "web/dist/${demo}.wasm"
+            echo "ok: web/dist/${demo}.wasm ($(du -h "web/dist/${demo}.wasm" | cut -f1))"
+          done
