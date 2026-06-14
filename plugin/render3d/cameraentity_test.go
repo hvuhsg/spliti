@@ -29,8 +29,9 @@ func TestCameraEntityDrivesResource(t *testing.T) {
 	a := app.New()
 	app.InsertResource(a, res)
 	spawnCam(a, tr, Camera{FovYDeg: 50, Near: 0.2, Far: 500, Active: true})
+	prop := newPropagateTransforms()
 	a.AddSystems(schedule.Update, func(c *app.Ctx) {
-		propagateTransforms(c)
+		prop(c)
 		applyCameraEntity(c)
 	})
 	a.SetMaxFrames(1).Run()
@@ -56,8 +57,9 @@ func TestInactiveCameraLeavesResource(t *testing.T) {
 	a := app.New()
 	app.InsertResource(a, res)
 	spawnCam(a, XForm().At(9, 9, 9), Camera{FovYDeg: 30, Active: false})
+	prop := newPropagateTransforms()
 	a.AddSystems(schedule.Update, func(c *app.Ctx) {
-		propagateTransforms(c)
+		prop(c)
 		applyCameraEntity(c)
 	})
 	a.SetMaxFrames(1).Run()
@@ -74,8 +76,9 @@ func TestOrthographicCameraDrivesResource(t *testing.T) {
 	a := app.New()
 	app.InsertResource(a, res)
 	spawnCam(a, XForm().At(0, 5, 0), Camera{Orthographic: true, OrthoSize: 20, Near: 0.5, Far: 100, Active: true})
+	prop := newPropagateTransforms()
 	a.AddSystems(schedule.Update, func(c *app.Ctx) {
-		propagateTransforms(c)
+		prop(c)
 		applyCameraEntity(c)
 	})
 	a.SetMaxFrames(1).Run()
@@ -126,8 +129,9 @@ func TestLastActiveCameraWins(t *testing.T) {
 	app.InsertResource(a, res)
 	spawnCam(a, XForm().At(1, 0, 0), Camera{FovYDeg: 60, Active: true})
 	spawnCam(a, XForm().At(2, 0, 0), Camera{FovYDeg: 60, Active: true})
+	prop := newPropagateTransforms()
 	a.AddSystems(schedule.Update, func(c *app.Ctx) {
-		propagateTransforms(c)
+		prop(c)
 		applyCameraEntity(c)
 	})
 	a.SetMaxFrames(1).Run()

@@ -10,11 +10,24 @@
 // drawing is performed by the tui plugin (which reads the registry as part
 // of its existing render pass), so sprite z-order and viewport-clipping
 // behave identically to plain Glyph entities.
+//
+// Animation is additive: attach a SpriteAnimation alongside a Sprite and the
+// plugin's Update system cycles Sprite.Ref through the active Clip's frames
+// (see animation.go). Because it rewrites Sprite.Ref, every backend that reads
+// Sprite.Ref animates with no renderer change. Frame selection advances on
+// wall-clock Time.Delta(), not Time.Alpha(): frames are discrete pictures, so
+// there is nothing to interpolate between them — Alpha() smooths *continuous*
+// fixed-step quantities (positions) onto the render rate, which does not apply
+// to picking which whole asset to show.
 package sprite
 
 import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/time"
+	"github.com/hvuhsg/spliti/schedule"
+	"github.com/mlange-42/arche/ecs"
+	"github.com/mlange-42/arche/generic"
 )
 
 // Cell is one position in a sprite's grid. Empty=true means the cell is
@@ -93,4 +106,28 @@ func (Plugin) Build(a *app.App) {
 	if !app.HasResource[SpriteRegistry](a) {
 		app.InsertResource(a, NewRegistry())
 	}
+	a.AddSystems(schedule.Update, app.System(animateSprites).Label("__spliti_sprite_animation"))
+}
+
+// animateSprites advances every SpriteAnimation by the frame delta and writes the
+// resulting frame into the entity's Sprite.Ref. Runs in Update — after Time's
+// First-stage tick refreshes Delta, and before the tui renderer's PostUpdate pass
+// reads Sprite.Ref. Entities lacking a Sprite (or with no Time resource) are
+// skipped.
+func animateSprites(c *app.Ctx) {
+	t := app.GetResource[time.Time](c)
+	if t == nil {
+		return
+	}
+	dt := t.Delta()
+	sprites := generic.NewMap[Sprite](c.World())
+	app.Query1[SpriteAnimation](c, func(e ecs.Entity, anim *SpriteAnimation) {
+		ref, ok := anim.Advance(dt)
+		if !ok {
+			return
+		}
+		if sprites.Has(e) {
+			sprites.Get(e).Ref = ref
+		}
+	})
 }

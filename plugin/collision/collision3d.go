@@ -53,9 +53,15 @@ func NewSystem3D(cfg Config3D) app.SystemFunc {
 	if pos == nil {
 		panic("collision.NewSystem3D: Config3D.Pos must be set")
 	}
+	// Persistent scratch reused across ticks (see the 2D NewSystem).
+	var (
+		bodies []aabb3
+		ents   []ecs.Entity
+		bp     broadphase3
+	)
 	return func(c *app.Ctx) {
-		var bodies []aabb3
-		var ents []ecs.Entity
+		bodies = bodies[:0]
+		ents = ents[:0]
 		world := c.World()
 		app.Query1[Collider3D](c, func(e ecs.Entity, col *Collider3D) {
 			ctr := pos(world, e)
@@ -66,7 +72,7 @@ func NewSystem3D(cfg Config3D) app.SystemFunc {
 			})
 			ents = append(ents, e)
 		})
-		pairs3(bodies, cell, func(i, j int) {
+		bp.pairs(bodies, cell, func(i, j int) {
 			app.SendEvent(c, Collision3DEvent{A: ents[i], B: ents[j]})
 		})
 	}

@@ -9,6 +9,9 @@ import (
 //go:embed pbr.wgsl
 var shaderCode string
 
+//go:embed pbr_skin.wgsl
+var skinShaderCode string
+
 // Vertex is one mesh vertex. Field order and size must match the @location
 // bindings in pbr.wgsl: position(12) + normal(12) + uv(8) + tangent(16) = 48
 // bytes.
@@ -122,6 +125,26 @@ func buildPipeline(g *GPU) {
 		panic("render3d: material bgl: " + err.Error())
 	}
 
+	// Bind group 2 (skinned pipeline only): the joint-matrix storage array, bound
+	// per skinned mesh with a dynamic offset so each sees its joints at index 0.
+	g.jointBGL, err = g.device.CreateBindGroupLayout(&wgpu.BindGroupLayoutDescriptor{
+		Label: "spliti.render3d.joints.bgl",
+		Entries: []wgpu.BindGroupLayoutEntry{
+			{
+				Binding:    0,
+				Visibility: wgpu.ShaderStageVertex,
+				Buffer: wgpu.BufferBindingLayout{
+					Type:             wgpu.BufferBindingTypeReadOnlyStorage,
+					HasDynamicOffset: true,
+					MinBindingSize:   0,
+				},
+			},
+		},
+	})
+	if err != nil {
+		panic("render3d: joint bgl: " + err.Error())
+	}
+
 	g.pipeline, err = buildRenderPipeline(g, false, false)
 	if err != nil {
 		panic("render3d: render pipeline: " + err.Error())
@@ -133,6 +156,10 @@ func buildPipeline(g *GPU) {
 	g.transparentPipeline, err = buildRenderPipeline(g, true, false)
 	if err != nil {
 		panic("render3d: transparent pipeline: " + err.Error())
+	}
+	g.skinnedPipeline, err = buildSkinnedPipeline(g)
+	if err != nil {
+		panic("render3d: skinned pipeline: " + err.Error())
 	}
 
 	g.draw.instanceCap = initialInstanceCap
@@ -151,6 +178,99 @@ func buildPipeline(g *GPU) {
 	g.pointBuf = newPointBuffer(g, g.pointCap)
 
 	g.frameBindGroup = newFrameBindGroup(g)
+
+	g.jointCap = maxSkinJoints
+	g.jointBuf = newJointBuffer(g, g.jointCap)
+	g.jointBindGroup = newJointBindGroup(g)
+}
+
+// buildSkinnedPipeline creates the skinned render pipeline: the skinned vertex
+// shader (vs_skinned, blending joint matrices) paired with the shared fs_main, a
+// vertex buffer 0 at skinVertexStride with the extra JOINTS_0/WEIGHTS_0
+// attributes, and the [frame, material, joint] bind-group layout. Opaque,
+// back-face culled — matching the default static pipeline.
+func buildSkinnedPipeline(g *GPU) (*wgpu.RenderPipeline, error) {
+	vsMod, err := g.device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "spliti.render3d.skin.vs",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: skinShaderCode},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer vsMod.Release()
+	fsMod, err := g.device.CreateShaderModule(&wgpu.ShaderModuleDescriptor{
+		Label:          "spliti.render3d.skin.fs",
+		WGSLDescriptor: &wgpu.ShaderModuleWGSLDescriptor{Code: shaderCode},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer fsMod.Release()
+
+	layout, err := g.device.CreatePipelineLayout(&wgpu.PipelineLayoutDescriptor{
+		Label:            "spliti.render3d.skin.layout",
+		BindGroupLayouts: []*wgpu.BindGroupLayout{g.frameBGL, g.materialBGL, g.jointBGL},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer layout.Release()
+
+	return g.device.CreateRenderPipeline(&wgpu.RenderPipelineDescriptor{
+		Label:  "spliti.render3d.skin.pipeline",
+		Layout: layout,
+		Vertex: wgpu.VertexState{
+			Module:     vsMod,
+			EntryPoint: "vs_skinned",
+			Buffers: []wgpu.VertexBufferLayout{
+				{ // buffer 0: per-vertex skinned mesh data
+					ArrayStride: skinVertexStride,
+					StepMode:    wgpu.VertexStepModeVertex,
+					Attributes: []wgpu.VertexAttribute{
+						{Format: wgpu.VertexFormatFloat32x3, Offset: 0, ShaderLocation: 0},   // position
+						{Format: wgpu.VertexFormatFloat32x3, Offset: 12, ShaderLocation: 1},  // normal
+						{Format: wgpu.VertexFormatFloat32x2, Offset: 24, ShaderLocation: 2},  // uv
+						{Format: wgpu.VertexFormatFloat32x4, Offset: 32, ShaderLocation: 3},  // tangent
+						{Format: wgpu.VertexFormatUint16x4, Offset: 48, ShaderLocation: 9},   // JOINTS_0
+						{Format: wgpu.VertexFormatFloat32x4, Offset: 56, ShaderLocation: 10}, // WEIGHTS_0
+					},
+				},
+				{ // buffer 1: per-instance model matrix (4x vec4) + RGBA tint
+					ArrayStride: instanceStride,
+					StepMode:    wgpu.VertexStepModeInstance,
+					Attributes: []wgpu.VertexAttribute{
+						{Format: wgpu.VertexFormatFloat32x4, Offset: 0, ShaderLocation: 4},
+						{Format: wgpu.VertexFormatFloat32x4, Offset: 16, ShaderLocation: 5},
+						{Format: wgpu.VertexFormatFloat32x4, Offset: 32, ShaderLocation: 6},
+						{Format: wgpu.VertexFormatFloat32x4, Offset: 48, ShaderLocation: 7},
+						{Format: wgpu.VertexFormatFloat32x4, Offset: 64, ShaderLocation: 8},
+					},
+				},
+			},
+		},
+		Primitive: wgpu.PrimitiveState{
+			Topology:  wgpu.PrimitiveTopologyTriangleList,
+			FrontFace: wgpu.FrontFaceCCW,
+			CullMode:  wgpu.CullModeBack,
+		},
+		DepthStencil: &wgpu.DepthStencilState{
+			Format:            g.depthFormat,
+			DepthWriteEnabled: true,
+			DepthCompare:      wgpu.CompareFunctionLess,
+			StencilFront:      wgpu.StencilFaceState{Compare: wgpu.CompareFunctionAlways},
+			StencilBack:       wgpu.StencilFaceState{Compare: wgpu.CompareFunctionAlways},
+		},
+		Multisample: wgpu.MultisampleState{Count: g.samples, Mask: 0xFFFFFFFF},
+		Fragment: &wgpu.FragmentState{
+			Module:     fsMod,
+			EntryPoint: "fs_main",
+			Targets: []wgpu.ColorTargetState{{
+				Format:    g.format,
+				Blend:     nil,
+				WriteMask: wgpu.ColorWriteMaskAll,
+			}},
+		},
+	})
 }
 
 // newFrameBindGroup builds the group-0 bind group from the current frame and
@@ -414,12 +534,21 @@ func disableMSAA(g *GPU) {
 		dp.Release()
 		return
 	}
+	sp, err := buildSkinnedPipeline(g)
+	if err != nil {
+		p.Release()
+		dp.Release()
+		tp.Release()
+		return
+	}
 	g.pipeline.Release()
 	g.pipeline = p
 	g.doubleSidedPipeline.Release()
 	g.doubleSidedPipeline = dp
 	g.transparentPipeline.Release()
 	g.transparentPipeline = tp
+	g.skinnedPipeline.Release()
+	g.skinnedPipeline = sp
 	ensureDepthTarget(g)
 }
 
