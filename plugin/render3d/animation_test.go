@@ -55,10 +55,12 @@ func TestSampleQuatSlerpEndpoints(t *testing.T) {
 
 func TestMat4FromGLTFRoundTrip(t *testing.T) {
 	src := m.TRS(m.Vec3{X: 1, Y: 2, Z: 3}, m.FromAxisAngle(m.Vec3{Z: 1}, 0.5), m.Vec3{X: 2, Y: 2, Z: 2})
+	// The gltf modeler hands back matrices as [row][col]; mat4FromGLTF must turn
+	// that into the engine's column-major layout (src[c*4+r] = element row r, col c).
 	var gm [4][4]float32
 	for c := 0; c < 4; c++ {
 		for r := 0; r < 4; r++ {
-			gm[c][r] = src[c*4+r]
+			gm[r][c] = src[c*4+r]
 		}
 	}
 	if got := mat4FromGLTF(gm); got != src {
@@ -156,7 +158,9 @@ func TestParseAnimations(t *testing.T) {
 func TestParseSkins(t *testing.T) {
 	doc := &gltf.Document{Buffers: []*gltf.Buffer{{}}}
 	identity := [4][4]float32{{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}}
-	trans := [4][4]float32{{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {1, 2, 3, 1}} // col 3 = translation
+	// The modeler's [4][4] is indexed [row][col], so a translation (1,2,3) lives in
+	// the last column (each row's 4th entry), not the last sub-array.
+	trans := [4][4]float32{{1, 0, 0, 1}, {0, 1, 0, 2}, {0, 0, 1, 3}, {0, 0, 0, 1}}
 	ibIdx := modeler.WriteInverseBindMatrices(doc, [][4][4]float32{identity, trans})
 	doc.Skins = []*gltf.Skin{{Joints: []int{0, 1}, InverseBindMatrices: gltf.Index(ibIdx)}}
 
