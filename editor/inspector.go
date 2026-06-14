@@ -95,6 +95,10 @@ func drawComponent(c *app.Ctx, st *state, e ecs.Entity, inst string, ti *registr
 		drawCameraFields(fc, comp)
 		return
 	}
+	if ti.Name == "InstanceColor" {
+		drawInstanceColorField(fc, comp)
+		return
+	}
 	for _, f := range ti.Fields {
 		if keys, ok := assetRefKeys(c, ti.Name, f.Name); ok {
 			drawAssetRefField(fc, f.Name, f.Value(comp), keys)
@@ -295,6 +299,8 @@ func drawField(fc fieldCtx, name string, kind registry.FieldKind, v reflect.Valu
 			v.Set(reflect.ValueOf(m.Vec4{X: arr[0], Y: arr[1], Z: arr[2], W: arr[3]}))
 		}
 		fc.gesture()
+	case registry.KindColor:
+		drawColorField(fc, name, v)
 	case registry.KindQuat:
 		drawQuatField(fc, name, v)
 	case registry.KindEntity:
@@ -304,6 +310,48 @@ func drawField(fc fieldCtx, name string, kind registry.FieldKind, v reflect.Valu
 	default:
 		imgui.TextDisabled(fmt.Sprintf("%s: (not editable)", name))
 	}
+}
+
+// colorFlags configures the color widgets: float (0..1) display with an alpha
+// bar, and HDR so emissive/light colors can exceed 1 without being clamped.
+const colorFlags = imgui.ColorEditFlagsFloat | imgui.ColorEditFlagsAlphaBar | imgui.ColorEditFlagsHDR
+
+// drawColorField edits a Vec3/Vec4 color field with a swatch that opens a full
+// color picker (click the swatch). Vec3 fields keep RGB only; Vec4 carry alpha.
+func drawColorField(fc fieldCtx, name string, v reflect.Value) {
+	switch vec := v.Interface().(type) {
+	case m.Vec3:
+		arr := [3]float32{vec.X, vec.Y, vec.Z}
+		if imgui.ColorEdit3V(name, &arr, colorFlags) {
+			v.Set(reflect.ValueOf(m.Vec3{X: arr[0], Y: arr[1], Z: arr[2]}))
+		}
+	case m.Vec4:
+		arr := [4]float32{vec.X, vec.Y, vec.Z, vec.W}
+		if imgui.ColorEdit4V(name, &arr, colorFlags) {
+			v.Set(reflect.ValueOf(m.Vec4{X: arr[0], Y: arr[1], Z: arr[2], W: arr[3]}))
+		}
+	}
+	fc.gesture()
+}
+
+// drawInstanceColorField edits the InstanceColor component (R,G,B,A floats) as a
+// single RGBA color picker rather than four separate drag inputs.
+func drawInstanceColorField(fc fieldCtx, comp reflect.Value) {
+	r := comp.FieldByName("R")
+	g := comp.FieldByName("G")
+	b := comp.FieldByName("B")
+	a := comp.FieldByName("A")
+	arr := [4]float32{
+		float32(r.Float()), float32(g.Float()),
+		float32(b.Float()), float32(a.Float()),
+	}
+	if imgui.ColorEdit4V("Color", &arr, colorFlags) {
+		r.SetFloat(float64(arr[0]))
+		g.SetFloat(float64(arr[1]))
+		b.SetFloat(float64(arr[2]))
+		a.SetFloat(float64(arr[3]))
+	}
+	fc.gesture()
 }
 
 // drawQuatField edits a quaternion as Euler degrees. The displayed angles come

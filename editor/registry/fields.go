@@ -2,6 +2,7 @@ package registry
 
 import (
 	"reflect"
+	"strings"
 
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	"github.com/mlange-42/arche/ecs"
@@ -24,6 +25,7 @@ const (
 	KindQuat
 	KindEntity
 	KindSlice // slice of leaf-kind or struct elements
+	KindColor // Vec3/Vec4 field that names a color: edited with a color picker
 )
 
 // Field is one inspectable field of a component, possibly nested one struct
@@ -77,6 +79,18 @@ func leafKind(t reflect.Type) FieldKind {
 	return KindOpaque
 }
 
+// isColorName reports whether a field named like this should be edited as a
+// color rather than a raw vector. Position/direction/scale vectors keep their
+// numeric drag widgets; only fields that read as a color get the picker.
+func isColorName(name string) bool {
+	switch strings.ToLower(name) {
+	case "color", "tint", "albedo", "basecolor", "emissive", "emission",
+		"ambient", "diffuse", "specular":
+		return true
+	}
+	return strings.HasSuffix(strings.ToLower(name), "color")
+}
+
 // KindOf classifies t as a leaf editor kind (KindOpaque when t needs structural
 // treatment — struct recursion or a slice widget — or is not editable at all).
 func KindOf(t reflect.Type) FieldKind { return leafKind(t) }
@@ -117,6 +131,9 @@ func appendFields(out []Field, t reflect.Type, prefix string, index []int, depth
 		name := prefix + sf.Name
 		idx := append(append([]int{}, index...), i)
 		if k := leafKind(sf.Type); k != KindOpaque {
+			if (k == KindVec3 || k == KindVec4) && isColorName(sf.Name) {
+				k = KindColor
+			}
 			out = append(out, Field{Name: name, Kind: k, Index: idx})
 			continue
 		}
