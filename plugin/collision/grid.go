@@ -75,6 +75,10 @@ func overlap2(a, b aabb2) bool {
 type Grid2 struct {
 	cell  int
 	cells map[[2]int][]int
+	// pool recycles per-cell id slices across reset cycles so that repeated
+	// per-tick rebuilds (see broadphase2) do not allocate a fresh slice per
+	// occupied cell every frame.
+	pool [][]int
 }
 
 // NewGrid2 returns an empty grid whose cells are cell units on a side. A
@@ -86,6 +90,36 @@ func NewGrid2(cell int) *Grid2 {
 	return &Grid2{cell: cell, cells: map[[2]int][]int{}}
 }
 
+// reset clears the grid for reuse with a new cell size, recycling every
+// occupied cell's id slice into the pool (truncated, capacity retained) and
+// keeping the map's bucket allocation. After reset the grid holds no entries.
+func (g *Grid2) reset(cell int) {
+	if cell <= 0 {
+		cell = 1
+	}
+	g.cell = cell
+	if g.cells == nil {
+		g.cells = map[[2]int][]int{}
+		return
+	}
+	for k, s := range g.cells {
+		g.pool = append(g.pool, s[:0])
+		delete(g.cells, k)
+	}
+}
+
+// takeSlice returns a recycled id slice (length 0) from the pool, or nil when
+// the pool is empty so the first append allocates.
+func (g *Grid2) takeSlice() []int {
+	n := len(g.pool)
+	if n == 0 {
+		return nil
+	}
+	s := g.pool[n-1]
+	g.pool = g.pool[:n-1]
+	return s
+}
+
 // Insert records id in every cell the box [minX,maxX) × [minY,maxY) overlaps.
 func (g *Grid2) Insert(id, minX, minY, maxX, maxY int) {
 	cx0, cy0 := floorDiv(minX, g.cell), floorDiv(minY, g.cell)
@@ -95,7 +129,11 @@ func (g *Grid2) Insert(id, minX, minY, maxX, maxY int) {
 	for cy := cy0; cy <= cy1; cy++ {
 		for cx := cx0; cx <= cx1; cx++ {
 			k := [2]int{cx, cy}
-			g.cells[k] = append(g.cells[k], id)
+			s, ok := g.cells[k]
+			if !ok {
+				s = g.takeSlice()
+			}
+			g.cells[k] = append(s, id)
 		}
 	}
 }
@@ -121,35 +159,46 @@ func (g *Grid2) Query(minX, minY, maxX, maxY int) []int {
 	return sortUnique(raw)
 }
 
-// pairs2 invokes emit(i, j) for every body pair (i<j) whose boxes overlap and
+// broadphase2 holds reusable scratch (grid, mark, candidate slices) for the 2D
+// broad phase so that a system running it every tick does not reallocate the
+// grid map and temporaries each frame. The zero value is ready to use; reuse
+// the same instance across ticks to amortize allocation.
+type broadphase2 struct {
+	grid Grid2
+	mark []int
+	raw  []int
+	cand []int
+}
+
+// pairs invokes emit(i, j) for every body pair (i<j) whose boxes overlap and
 // whose layers permit a collision. Pairs are emitted in ascending (i, then j)
 // order — identical to a brute-force i<j scan — so the event stream is
 // deterministic regardless of the spatial hash's internal bucketing.
-func pairs2(bodies []aabb2, cell int, emit func(i, j int)) {
+func (bp *broadphase2) pairs(bodies []aabb2, cell int, emit func(i, j int)) {
 	if len(bodies) < 2 {
 		return
 	}
-	g := NewGrid2(cell)
+	bp.grid.reset(cell)
 	for i := range bodies {
 		b := bodies[i]
-		g.Insert(i, b.minX, b.minY, b.maxX, b.maxY)
+		bp.grid.Insert(i, b.minX, b.minY, b.maxX, b.maxY)
 	}
 	// mark[j] == i means body j has already been collected as a candidate of
 	// body i this round, so a pair sharing several cells is tested only once.
-	mark := make([]int, len(bodies))
-	for i := range mark {
-		mark[i] = -1
+	bp.mark = resizeInts(bp.mark, len(bodies))
+	for i := range bp.mark {
+		bp.mark[i] = -1
 	}
-	var raw, cand []int
+	raw, cand := bp.raw, bp.cand
 	for i := range bodies {
 		b := bodies[i]
-		raw = g.candidates(b.minX, b.minY, b.maxX, b.maxY, raw[:0])
+		raw = bp.grid.candidates(b.minX, b.minY, b.maxX, b.maxY, raw[:0])
 		cand = cand[:0]
 		for _, j := range raw {
-			if j <= i || mark[j] == i {
+			if j <= i || bp.mark[j] == i {
 				continue
 			}
-			mark[j] = i
+			bp.mark[j] = i
 			cand = append(cand, j)
 		}
 		sort.Ints(cand)
@@ -159,6 +208,23 @@ func pairs2(bodies []aabb2, cell int, emit func(i, j int)) {
 			}
 		}
 	}
+	bp.raw, bp.cand = raw, cand
+}
+
+// pairs2 is the allocating one-shot form, kept for tests and callers that do
+// not retain broad-phase state. It matches the original free-function behavior.
+func pairs2(bodies []aabb2, cell int, emit func(i, j int)) {
+	var bp broadphase2
+	bp.pairs(bodies, cell, emit)
+}
+
+// resizeInts returns s resliced to length n, reusing its backing array when it
+// has the capacity and allocating a fresh slice otherwise.
+func resizeInts(s []int, n int) []int {
+	if cap(s) >= n {
+		return s[:n]
+	}
+	return make([]int, n)
 }
 
 // --- 3D ------------------------------------------------------------------
@@ -189,6 +255,7 @@ func overlap3(a, b aabb3) bool {
 type Grid3 struct {
 	cell  float32
 	cells map[[3]int][]int
+	pool  [][]int
 }
 
 // NewGrid3 returns an empty 3D grid with cubic cells of the given side. A
@@ -200,6 +267,33 @@ func NewGrid3(cell float32) *Grid3 {
 	return &Grid3{cell: cell, cells: map[[3]int][]int{}}
 }
 
+// reset clears the grid for reuse, recycling cell slices into the pool. See
+// Grid2.reset.
+func (g *Grid3) reset(cell float32) {
+	if cell <= 0 {
+		cell = 1
+	}
+	g.cell = cell
+	if g.cells == nil {
+		g.cells = map[[3]int][]int{}
+		return
+	}
+	for k, s := range g.cells {
+		g.pool = append(g.pool, s[:0])
+		delete(g.cells, k)
+	}
+}
+
+func (g *Grid3) takeSlice() []int {
+	n := len(g.pool)
+	if n == 0 {
+		return nil
+	}
+	s := g.pool[n-1]
+	g.pool = g.pool[:n-1]
+	return s
+}
+
 // Insert records id in every cell the box [min,max] overlaps.
 func (g *Grid3) Insert(id int, min, max m.Vec3) {
 	cx0, cy0, cz0 := cellOf(min.X, g.cell), cellOf(min.Y, g.cell), cellOf(min.Z, g.cell)
@@ -208,7 +302,11 @@ func (g *Grid3) Insert(id int, min, max m.Vec3) {
 		for cy := cy0; cy <= cy1; cy++ {
 			for cx := cx0; cx <= cx1; cx++ {
 				k := [3]int{cx, cy, cz}
-				g.cells[k] = append(g.cells[k], id)
+				s, ok := g.cells[k]
+				if !ok {
+					s = g.takeSlice()
+				}
+				g.cells[k] = append(s, id)
 			}
 		}
 	}
@@ -232,29 +330,37 @@ func (g *Grid3) Query(min, max m.Vec3) []int {
 	return sortUnique(g.candidates(min, max, nil))
 }
 
-// pairs3 is the 3D analogue of pairs2.
-func pairs3(bodies []aabb3, cell float32, emit func(i, j int)) {
+// broadphase3 is the 3D analogue of broadphase2.
+type broadphase3 struct {
+	grid Grid3
+	mark []int
+	raw  []int
+	cand []int
+}
+
+// pairs is the 3D analogue of broadphase2.pairs.
+func (bp *broadphase3) pairs(bodies []aabb3, cell float32, emit func(i, j int)) {
 	if len(bodies) < 2 {
 		return
 	}
-	g := NewGrid3(cell)
+	bp.grid.reset(cell)
 	for i := range bodies {
-		g.Insert(i, bodies[i].min, bodies[i].max)
+		bp.grid.Insert(i, bodies[i].min, bodies[i].max)
 	}
-	mark := make([]int, len(bodies))
-	for i := range mark {
-		mark[i] = -1
+	bp.mark = resizeInts(bp.mark, len(bodies))
+	for i := range bp.mark {
+		bp.mark[i] = -1
 	}
-	var raw, cand []int
+	raw, cand := bp.raw, bp.cand
 	for i := range bodies {
 		b := bodies[i]
-		raw = g.candidates(b.min, b.max, raw[:0])
+		raw = bp.grid.candidates(b.min, b.max, raw[:0])
 		cand = cand[:0]
 		for _, j := range raw {
-			if j <= i || mark[j] == i {
+			if j <= i || bp.mark[j] == i {
 				continue
 			}
-			mark[j] = i
+			bp.mark[j] = i
 			cand = append(cand, j)
 		}
 		sort.Ints(cand)
@@ -264,6 +370,13 @@ func pairs3(bodies []aabb3, cell float32, emit func(i, j int)) {
 			}
 		}
 	}
+	bp.raw, bp.cand = raw, cand
+}
+
+// pairs3 is the allocating one-shot form, kept for tests.
+func pairs3(bodies []aabb3, cell float32, emit func(i, j int)) {
+	var bp broadphase3
+	bp.pairs(bodies, cell, emit)
 }
 
 // sortUnique sorts ids ascending and removes duplicates in place.

@@ -534,14 +534,23 @@ func (st *state) deleteSelection(c *app.Ctx) {
 	}
 }
 
-// freeInstanceName derives an unused instance name from a base name.
+// freeInstanceName derives an unused instance name from a base name. The live
+// and source name sets are gathered once up front so each candidate is an O(1)
+// map probe rather than a fresh world scan plus source scan per try.
 func (st *state) freeInstanceName(c *app.Ctx, base string) string {
+	live := buildNameIndex(c)
+	inSource := map[string]bool{}
+	if sc := st.scene(); sc != nil {
+		for _, sp := range sc.Spawns {
+			inSource[sp.Instance] = true
+		}
+	}
 	for i := 2; ; i++ {
 		name := fmt.Sprintf("%s%d", base, i)
-		if _, exists := entityByInstance(c, name); exists {
+		if _, exists := live[name]; exists {
 			continue
 		}
-		if sc := st.scene(); sc != nil && sc.Spawn(name) != nil {
+		if inSource[name] {
 			continue
 		}
 		return name

@@ -16,6 +16,13 @@ import (
 type Mesh struct {
 	Vertices []Vertex
 	Indices  []uint32
+
+	// SkinVertices, when non-nil, carries the same geometry as Vertices plus
+	// per-vertex joint indices and weights (glTF JOINTS_0/WEIGHTS_0). The glTF
+	// loader fills it for skinned primitives; MeshRegistry.Load then uploads it
+	// (instead of Vertices) so the skinned pipeline can blend joint matrices.
+	// Vertices is still populated (bind pose) for bounds and picking.
+	SkinVertices []SkinVertex
 }
 
 // meshGPU is one uploaded mesh: its vertex and index buffers plus the index
@@ -29,6 +36,7 @@ type meshGPU struct {
 	ibufSize   uint64 // byte size of ibuf, tracked for portable SetIndexBuffer
 	indexCount uint32
 	cpu        *Mesh
+	skinned    bool // vbuf holds SkinVertex records (skinVertexStride), not Vertex
 
 	// Model-space bounding sphere, computed at Load and used for frustum culling.
 	boundsCenter m.Vec3
@@ -60,7 +68,16 @@ func (r *MeshRegistry) Load(ref string, mesh *Mesh) error {
 	}
 	g := r.gpu
 
-	vbytes := wgpu.ToBytes(mesh.Vertices)
+	// Skinned meshes upload their SkinVertex records (geometry + joints/weights);
+	// the skinned pipeline's vertex layout reads them at skinVertexStride. Static
+	// meshes upload the plain Vertex slice. Bounds/picking always use Vertices.
+	skinned := len(mesh.SkinVertices) > 0
+	var vbytes []byte
+	if skinned {
+		vbytes = wgpu.ToBytes(mesh.SkinVertices)
+	} else {
+		vbytes = wgpu.ToBytes(mesh.Vertices)
+	}
 	vbuf, err := g.device.CreateBufferInit(&wgpu.BufferInitDescriptor{
 		Label:    "spliti.render3d.vbuf." + ref,
 		Contents: vbytes,
@@ -91,6 +108,7 @@ func (r *MeshRegistry) Load(ref string, mesh *Mesh) error {
 		ibufSize:     uint64(len(ibytes)),
 		indexCount:   uint32(len(mesh.Indices)),
 		cpu:          mesh,
+		skinned:      skinned,
 		boundsCenter: center,
 		boundsRadius: radius,
 	}

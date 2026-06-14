@@ -6,7 +6,6 @@ import (
 
 	"github.com/mlange-42/arche/ecs"
 	"github.com/mlange-42/arche/ecs/event"
-	"github.com/mlange-42/arche/generic"
 	"github.com/mlange-42/arche/listener"
 )
 
@@ -81,7 +80,7 @@ func QueryChanged1[T any](ctx *Ctx, fn func(ecs.Entity, *T)) {
 	if len(buf.entities) == 0 {
 		return
 	}
-	m := generic.NewMap1[T](ctx.world)
+	m := cachedMap1[T](ctx)
 	// Iterate a snapshot — fn may indirectly cause more entities to be added
 	// to buf (e.g. via Commands that spawn T-bearing entities), and we want
 	// those to land in next frame's set, not this iteration.

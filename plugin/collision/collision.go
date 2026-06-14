@@ -78,13 +78,20 @@ func NewSystem(cfg Config) app.SystemFunc {
 		cell = DefaultCellSize
 	}
 	tag := cfg.Tag
+	// Persistent scratch reused across ticks so the broad phase does not
+	// reallocate its grid, body list, and temporaries every FixedUpdate.
+	type meta struct {
+		e   ecs.Entity
+		tag string
+	}
+	var (
+		bodies []aabb2
+		infos  []meta
+		bp     broadphase2
+	)
 	return func(c *app.Ctx) {
-		type meta struct {
-			e   ecs.Entity
-			tag string
-		}
-		var bodies []aabb2
-		var infos []meta
+		bodies = bodies[:0]
+		infos = infos[:0]
 		world := c.World()
 		app.Query2[tui.Position, Collider](c, func(e ecs.Entity, p *tui.Position, col *Collider) {
 			bodies = append(bodies, aabb2{
@@ -98,7 +105,7 @@ func NewSystem(cfg Config) app.SystemFunc {
 			}
 			infos = append(infos, meta{e: e, tag: t})
 		})
-		pairs2(bodies, cell, func(i, j int) {
+		bp.pairs(bodies, cell, func(i, j int) {
 			app.SendEvent(c, CollisionEvent{
 				A: infos[i].e, B: infos[j].e,
 				ATag: infos[i].tag, BTag: infos[j].tag,

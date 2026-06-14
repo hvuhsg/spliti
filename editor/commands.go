@@ -435,12 +435,14 @@ func (cmd *cmdDelete) Undo(c *app.Ctx) error {
 		}
 	}
 	// Rebuild live entities from the restored lines, parents before children.
+	// One name index for the whole batch keeps repeated lookups O(1).
+	idx := buildNameIndex(c)
 	for i := len(cmd.instances) - 1; i >= 0; i-- {
 		if sc == nil {
 			break
 		}
 		if sp := sc.Spawn(cmd.instances[i]); sp != nil {
-			if err := syncInstanceFromModel(c, st, sp); err != nil {
+			if err := syncInstanceFromModelInto(c, st, sp, idx); err != nil {
 				st.status(fmt.Sprintf("restore %s: %v", cmd.instances[i], err))
 			}
 		}
@@ -604,12 +606,60 @@ func spawnLive(c *app.Ctx, st *state, instance, prefab string, t render3d.Transf
 	return e, nil
 }
 
+// nameIndex maps an instance name to its live entity. It accelerates batch
+// syncs (Reload, undo-of-delete) where the same instances are looked up many
+// times: building it once is O(n), versus an O(n) world scan per lookup which
+// is O(n²) over a whole scene. A nil nameIndex is valid and falls back to the
+// scanning entityByInstance, so single-shot callers need not build one.
+//
+// The index must be kept current during a batch: spawnLive creates entities
+// immediately (scene.Spawn assigns the name component now, not deferred), so a
+// later parent link must see an instance synced earlier in the same pass.
+// Callers add freshly spawned entities via add.
+type nameIndex map[string]ecs.Entity
+
+// buildNameIndex snapshots the current live name→entity mapping. On duplicate
+// names the first in query order wins, matching entityByInstance.
+func buildNameIndex(c *app.Ctx) nameIndex {
+	idx := nameIndex{}
+	app.Query1[scene.Name](c, func(e ecs.Entity, n *scene.Name) {
+		if _, dup := idx[n.Value]; !dup {
+			idx[n.Value] = e
+		}
+	})
+	return idx
+}
+
+// find resolves name through the index, or by scanning when the index is nil.
+func (ix nameIndex) find(c *app.Ctx, name string) (ecs.Entity, bool) {
+	if ix != nil {
+		e, ok := ix[name]
+		return e, ok
+	}
+	return entityByInstance(c, name)
+}
+
+// add records a freshly spawned instance so later lookups in the same batch
+// resolve it. A no-op on a nil index.
+func (ix nameIndex) add(name string, e ecs.Entity) {
+	if ix != nil {
+		ix[name] = e
+	}
+}
+
 // syncInstanceFromModel makes the live world match one model spawn: the entity
 // is created from its prefab when missing, then transform, scene.Set overrides,
 // scene.Remove strips, and the parent link are applied. Shared by undo-of-
 // delete, Reload, and the file watcher.
 func syncInstanceFromModel(c *app.Ctx, st *state, sp *srcmodel.Spawn) error {
-	e, ok := entityByInstance(c, sp.Instance)
+	return syncInstanceFromModelInto(c, st, sp, nil)
+}
+
+// syncInstanceFromModelInto is syncInstanceFromModel with a reusable name index
+// for batch callers. A nil idx behaves exactly like syncInstanceFromModel
+// (scanning lookups).
+func syncInstanceFromModelInto(c *app.Ctx, st *state, sp *srcmodel.Spawn, idx nameIndex) error {
+	e, ok := idx.find(c, sp.Instance)
 	if !ok {
 		var err error
 		var t render3d.Transform3D
@@ -622,6 +672,7 @@ func syncInstanceFromModel(c *app.Ctx, st *state, sp *srcmodel.Spawn) error {
 		if err != nil {
 			return err
 		}
+		idx.add(sp.Instance, e)
 	} else if sp.Transform != nil && sp.Transform.Editable {
 		tm := generic.NewMap[render3d.Transform3D](c.World())
 		if tm.Has(e) {
@@ -651,7 +702,7 @@ func syncInstanceFromModel(c *app.Ctx, st *state, sp *srcmodel.Spawn) error {
 	// Parent link last (the parent may have been synced just before).
 	pm := generic.NewMap[render3d.Parent](c.World())
 	if sp.ParentLine != nil {
-		if pe, ok := entityByInstance(c, sp.ParentLine.Parent); ok {
+		if pe, ok := idx.find(c, sp.ParentLine.Parent); ok {
 			scene.Set(c, e, render3d.Parent{Entity: pe})
 		}
 	} else if pm.Has(e) {
@@ -713,8 +764,9 @@ func namedSubtreeLeafFirst(c *app.Ctx, root ecs.Entity) []string {
 		depth int
 	}
 	var out []rec
+	pm := generic.NewMap[render3d.Parent](c.World())
 	app.Query1[scene.Name](c, func(e ecs.Entity, n *scene.Name) {
-		d, ok := depthUnder(c, e, root)
+		d, ok := depthUnder(c, pm, e, root)
 		if ok {
 			out = append(out, rec{n.Value, d})
 		}
@@ -728,11 +780,12 @@ func namedSubtreeLeafFirst(c *app.Ctx, root ecs.Entity) []string {
 }
 
 // depthUnder walks e's parent chain looking for root; returns the link count.
-func depthUnder(c *app.Ctx, e, root ecs.Entity) (int, bool) {
+// pm is the world's Parent map, passed in so callers iterating many entities
+// build it once rather than per call.
+func depthUnder(c *app.Ctx, pm generic.Map[render3d.Parent], e, root ecs.Entity) (int, bool) {
 	if e == root {
 		return 0, true
 	}
-	pm := generic.NewMap[render3d.Parent](c.World())
 	depth := 0
 	for cur := e; depth < 1024; depth++ {
 		if !pm.Has(cur) {
@@ -751,6 +804,7 @@ func depthUnder(c *app.Ctx, e, root ecs.Entity) (int, bool) {
 
 // isDescendant reports whether e sits in root's subtree.
 func isDescendant(c *app.Ctx, e, root ecs.Entity) bool {
-	_, ok := depthUnder(c, e, root)
+	pm := generic.NewMap[render3d.Parent](c.World())
+	_, ok := depthUnder(c, pm, e, root)
 	return ok
 }

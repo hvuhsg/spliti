@@ -4,6 +4,7 @@ import (
 	"github.com/cogentcore/webgpu/wgpu"
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
+	"github.com/mlange-42/arche/generic"
 )
 
 // drawState is one scene pass's per-frame collection buffers plus its GPU
@@ -12,10 +13,11 @@ import (
 // the frame's command buffer executes, so passes sharing a buffer would all
 // see the last writer's data.
 type drawState struct {
-	items   []renderItem
-	tItems  []renderItem // transparent items, sorted back-to-front each frame
-	scratch []instanceData
-	batches []meshBatch
+	items        []renderItem
+	tItems       []renderItem // transparent items, sorted back-to-front each frame
+	skinnedItems []renderItem // skeletal-skinned items, drawn one-per-instance
+	scratch      []instanceData
+	batches      []meshBatch
 
 	instanceBuf *wgpu.Buffer
 	instanceCap int // capacity in instances
@@ -23,6 +25,16 @@ type drawState struct {
 	// frustum is the pass camera's six clipping planes, rebuilt each frame in
 	// drawMeshes and used to cull entities whose world bounds fall outside it.
 	frustum frustum
+
+	// Cached optional-component maps for the per-entity probes in drawMeshes.
+	// Built once (lazily) and reused: a generic Map embeds per-world component
+	// IDs, and the world is fixed for a pass's lifetime, so rebuilding one every
+	// frame only churns allocation. mapsReady guards first-use construction.
+	mapsReady      bool
+	matRefMap      generic.Map[MaterialRef]
+	colorMap       generic.Map[InstanceColor]
+	transparentMap generic.Map[Transparent]
+	skinnedMap     generic.Map[SkinnedMesh]
 }
 
 // ensureCap grows the instance buffer to hold at least n instances.

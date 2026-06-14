@@ -137,10 +137,13 @@ func reloadScene(c *app.Ctx, st *state) {
 	}
 
 	// Sync every model spawn into the live world, parents before children
-	// (source order guarantees a parent line's instances precede it).
+	// (source order guarantees a parent line's instances precede it). Build the
+	// name index once, after the despawns above, so per-instance lookups are
+	// O(1) instead of an O(n) scan each (O(n²) over the whole scene).
 	applied, failed := 0, 0
+	idx := buildNameIndex(c)
 	for _, sp := range sc.Spawns {
-		if err := syncInstanceFromModel(c, st, sp); err != nil {
+		if err := syncInstanceFromModelInto(c, st, sp, idx); err != nil {
 			failed++
 			st.status(fmt.Sprintf("%s: %v", sp.Instance, err))
 			continue

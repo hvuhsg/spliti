@@ -64,10 +64,14 @@ func SpawnModel(c *app.Commands, model *Model, rootTransform Transform3D) {
 		rootMap := generic.NewMap2[Transform3D, GlobalTransform](w)
 		nodeMap := generic.NewMap3[Transform3D, GlobalTransform, Parent](w)
 		primMap := generic.NewMap5[Transform3D, GlobalTransform, MeshRenderer, MaterialRef, Parent](w)
+		skinnedPrimMap := generic.NewMap6[Transform3D, GlobalTransform, MeshRenderer, MaterialRef, Parent, SkinnedMesh](w)
 		ident := func() *GlobalTransform { return &GlobalTransform{Matrix: m.Identity4()} }
 
 		rt := rootTransform
 		root := rootMap.NewWith(&rt, ident())
+
+		// Track each node's spawned entity so an Animator can address them by index.
+		nodeEntities := make([]ecs.Entity, len(model.Nodes))
 
 		var spawnNode func(idx int, parent ecs.Entity)
 		spawnNode = func(idx int, parent ecs.Entity) {
@@ -78,6 +82,7 @@ func SpawnModel(c *app.Commands, model *Model, rootTransform Transform3D) {
 			t := n.Transform
 			p := Parent{Entity: parent}
 			e := nodeMap.NewWith(&t, ident(), &p)
+			nodeEntities[idx] = e
 			for i, mesh := range n.MeshRefs {
 				mat := ""
 				if i < len(n.MatRefs) {
@@ -87,7 +92,14 @@ func SpawnModel(c *app.Commands, model *Model, rootTransform Transform3D) {
 				pp := Parent{Entity: e}
 				mr := MeshRenderer{Mesh: mesh}
 				ref := MaterialRef{Material: mat}
-				primMap.NewWith(&pt, ident(), &mr, &ref, &pp)
+				if n.Skin >= 0 && n.Skin < len(model.Skins) {
+					// Skinned primitive: carry a SkinnedMesh so computeJointMatrices
+					// and the skinned pipeline pick it up. Rig is the model root.
+					sm := SkinnedMesh{Rig: root, SkinIdx: n.Skin, Model: model}
+					skinnedPrimMap.NewWith(&pt, ident(), &mr, &ref, &pp, &sm)
+				} else {
+					primMap.NewWith(&pt, ident(), &mr, &ref, &pp)
+				}
 			}
 			for _, child := range n.Children {
 				spawnNode(child, e)
@@ -95,6 +107,17 @@ func SpawnModel(c *app.Commands, model *Model, rootTransform Transform3D) {
 		}
 		for _, r := range model.Roots {
 			spawnNode(r, root)
+		}
+
+		// Models with clips or skins get an AnimationRig (node->entity map) on the
+		// root so the Animator can drive node transforms and computeJointMatrices can
+		// resolve joint world matrices. The Animator plays the first clip looped; it
+		// is inert when the model has no animations (a skin-only model).
+		if len(model.Animations) > 0 || len(model.Skins) > 0 {
+			animMap := generic.NewMap2[Animator, AnimationRig](w)
+			animMap.Assign(root,
+				&Animator{Model: model, Clip: 0, Speed: 1, Loop: true, Playing: len(model.Animations) > 0},
+				&AnimationRig{NodeEntities: nodeEntities})
 		}
 	})
 }

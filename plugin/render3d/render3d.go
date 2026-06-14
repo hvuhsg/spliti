@@ -63,6 +63,12 @@ type Plugin struct {
 	// Samples requests multisample anti-aliasing (MSAA). WebGPU portably supports
 	// 1 (off) and 4; any value >1 is treated as 4. Zero/1 leaves MSAA off.
 	Samples int
+
+	// HotReload watches the on-disk files of assets loaded via the AssetLoader and
+	// re-uploads them when they change, so editing a model or texture updates the
+	// running scene live. Native-only and intended for development; ignored on
+	// wasm/headless builds.
+	HotReload bool
 }
 
 // Color is an RGBA color in linear-ish [0,1] components, used for the clear
@@ -97,6 +103,10 @@ type GPU struct {
 	// transparentPipeline shares the layout and shader but blends with depth-write
 	// off, for the back-to-front translucent pass after opaque geometry.
 	transparentPipeline *wgpu.RenderPipeline
+	// skinnedPipeline draws skeletal-skinned meshes: the vs_skinned vertex shader
+	// (joint blending) over a skinVertexStride layout, with an extra joint-matrix
+	// bind group. Opaque, back-face culled.
+	skinnedPipeline *wgpu.RenderPipeline
 	// format is the swapchain/pipeline color format; depthFormat is the
 	// depth-stencil attachment format. Both kept so the pipeline can be rebuilt
 	// (the MSAA fallback) without re-deriving them.
@@ -126,6 +136,15 @@ type GPU struct {
 	frameBindGroup *wgpu.BindGroup
 	frameBGL       *wgpu.BindGroupLayout
 	materialBGL    *wgpu.BindGroupLayout
+
+	// Skeletal-skinning joint matrices: a storage buffer of all skinned entities'
+	// joint blocks (packed at 256-byte-aligned offsets each frame by
+	// computeJointMatrices) bound at group 2 with a per-entity dynamic offset.
+	jointBuf       *wgpu.Buffer
+	jointCap       int // capacity in mat4s
+	jointBGL       *wgpu.BindGroupLayout
+	jointBindGroup *wgpu.BindGroup
+	jointScratch   []m.Mat4 // CPU packing scratch, reused per frame
 
 	meshes    *MeshRegistry // back-references so teardown frees GPU resources
 	materials *MaterialRegistry
@@ -305,9 +324,16 @@ func finishBuild(p Plugin, a *app.App, instance *wgpu.Instance, surface *wgpu.Su
 	app.InsertResource(a, g.gizmo)
 	app.InsertResource(a, g.overlay)
 
-	a.AddOnExit(func() { releaseGPU(g) })
+	loader := newAssetLoader(meshes, materials, p.HotReload)
+	app.InsertResource(a, loader)
+
+	a.AddOnExit(func() {
+		loader.close()
+		releaseGPU(g)
+	})
 
 	installSystems(a)
+	installLoaderSystem(a)
 	return g
 }
 
@@ -363,6 +389,12 @@ func releaseGPU(g *GPU) {
 	if g.pointBuf != nil {
 		g.pointBuf.Release()
 	}
+	if g.jointBindGroup != nil {
+		g.jointBindGroup.Release()
+	}
+	if g.jointBuf != nil {
+		g.jointBuf.Release()
+	}
 	if g.frameBuf != nil {
 		g.frameBuf.Release()
 	}
@@ -373,6 +405,9 @@ func releaseGPU(g *GPU) {
 		v.releaseGPU()
 	}
 	g.views = nil
+	if g.skinnedPipeline != nil {
+		g.skinnedPipeline.Release()
+	}
 	if g.transparentPipeline != nil {
 		g.transparentPipeline.Release()
 	}
@@ -381,6 +416,9 @@ func releaseGPU(g *GPU) {
 	}
 	if g.pipeline != nil {
 		g.pipeline.Release()
+	}
+	if g.jointBGL != nil {
+		g.jointBGL.Release()
 	}
 	if g.materialBGL != nil {
 		g.materialBGL.Release()

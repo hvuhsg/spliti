@@ -25,6 +25,12 @@ type Model struct {
 	Name  string
 	Nodes []ModelNode // parallel to the glTF node list; Children index into this slice
 	Roots []int       // indices of the scene's root nodes
+
+	// Animations are the model's keyframe clips (empty if the asset has none).
+	// SpawnModel attaches an Animator playing Animations[0] to the spawned root.
+	Animations []Animation
+	// Skins are the model's skeleton bindings, referenced by ModelNode.Skin.
+	Skins []Skin
 }
 
 // ModelNode is one node in a loaded model: a local transform, the mesh
@@ -36,20 +42,53 @@ type ModelNode struct {
 	MeshRefs  []string // one per glTF primitive on this node's mesh
 	MatRefs   []string // parallel to MeshRefs ("" => default material)
 	Children  []int
+	Skin      int // index into Model.Skins for a skinned mesh node, or -1
+}
+
+// ModelData is the fully CPU-decoded form of a glTF asset: meshes as *Mesh,
+// materials as plain Material values (textures held as image.Image), and the
+// node tree — with no GPU handles. It is safe to build on a goroutine (the async
+// loader does); call upload on the main thread to turn it into a *Model.
+type ModelData struct {
+	Name       string
+	Meshes     []decodedMesh // one per renderable (triangle) primitive
+	Materials  []Material    // index-parallel to the glTF material list
+	Nodes      []decodedNode // parallel to the glTF node list
+	Roots      []int         // indices into Nodes: the active scene's roots
+	Animations []Animation
+	Skins      []Skin
+}
+
+// decodedMesh is one decoded primitive plus the bookkeeping upload needs to
+// reproduce the exact ref strings (name/meshM_primP) and resolve its material.
+type decodedMesh struct {
+	mesh        *Mesh
+	materialIdx int // index into ModelData.Materials, or -1 for the default
+	meshIdx     int // glTF mesh index (for the ref name)
+	primIdx     int // primitive index within that mesh (for the ref name)
+}
+
+// decodedNode mirrors ModelNode but references primitives by index into
+// ModelData.Meshes instead of by uploaded ref (which upload assigns).
+type decodedNode struct {
+	Name      string
+	Transform Transform3D
+	PrimIdx   []int // indices into ModelData.Meshes
+	Children  []int
+	Skin      int // index into ModelData.Skins, or -1
 }
 
 // LoadGLTF decodes a .gltf or .glb file from disk, uploads every triangle
 // primitive as a mesh and every material (with textures) into the registries
 // under refs prefixed by name, and returns a Model for SpawnModel. It must run
-// after the render3d plugin's Build (it needs the GPU device).
+// after the render3d plugin's Build (it needs the GPU device). For loads that
+// must not block the main thread, see AssetLoader.LoadModelAsync.
 func LoadGLTF(meshes *MeshRegistry, materials *MaterialRegistry, name, file string) (*Model, error) {
-	doc, err := gltf.Open(file)
+	md, err := DecodeGLTF(name, file)
 	if err != nil {
-		return nil, fmt.Errorf("render3d: open glTF %q: %w", file, err)
+		return nil, err
 	}
-	dir := filepath.Dir(file)
-	readURI := func(uri string) ([]byte, error) { return os.ReadFile(filepath.Join(dir, uri)) }
-	return buildModel(meshes, materials, name, doc, readURI)
+	return md.upload(meshes, materials)
 }
 
 // LoadGLTFFS is LoadGLTF reading from an fs.FS (e.g. an embed.FS), so models can
@@ -57,44 +96,75 @@ func LoadGLTF(meshes *MeshRegistry, materials *MaterialRegistry, name, file stri
 // the glTF file's directory within the FS; self-contained .glb files need no
 // external access.
 func LoadGLTFFS(meshes *MeshRegistry, materials *MaterialRegistry, name string, fsys fs.FS, file string) (*Model, error) {
-	f, err := fsys.Open(file)
+	md, err := DecodeGLTFFS(name, fsys, file)
+	if err != nil {
+		return nil, err
+	}
+	return md.upload(meshes, materials)
+}
+
+// DecodeGLTF reads and fully decodes a .gltf/.glb file from disk into a
+// ModelData without touching the GPU. It does the expensive work (file IO, image
+// decode, attribute parsing) and is therefore safe to run on a goroutine; pair
+// it with ModelData.upload on the main thread.
+func DecodeGLTF(name, file string) (*ModelData, error) {
+	doc, err := gltf.Open(file)
+	if err != nil {
+		return nil, fmt.Errorf("render3d: open glTF %q: %w", file, err)
+	}
+	dir := filepath.Dir(file)
+	readURI := func(uri string) ([]byte, error) { return os.ReadFile(filepath.Join(dir, uri)) }
+	return decodeModel(name, doc, readURI)
+}
+
+// DecodeGLTFFS is DecodeGLTF reading from an fs.FS. Like DecodeGLTF it performs
+// no GPU work.
+func DecodeGLTFFS(name string, fsys fs.FS, file string) (*ModelData, error) {
+	// Buffer/image URIs in a glTF are relative to the glTF file, but
+	// gltf.NewDecoderFS resolves them against fsys's root. Root a sub-FS at the
+	// glTF's directory so external .bin buffers (and textures) load whether the
+	// model sits at the FS root or in a subdirectory (e.g. embedded assets/).
+	dir, base := path.Dir(file), path.Base(file)
+	sub := fsys
+	if dir != "." {
+		s, err := fs.Sub(fsys, dir)
+		if err != nil {
+			return nil, fmt.Errorf("render3d: open glTF %q: %w", file, err)
+		}
+		sub = s
+	}
+	f, err := sub.Open(base)
 	if err != nil {
 		return nil, fmt.Errorf("render3d: open glTF %q: %w", file, err)
 	}
 	defer f.Close()
 	doc := new(gltf.Document)
-	if err := gltf.NewDecoderFS(f, fsys).Decode(doc); err != nil {
+	if err := gltf.NewDecoderFS(f, sub).Decode(doc); err != nil {
 		return nil, fmt.Errorf("render3d: decode glTF %q: %w", file, err)
 	}
-	dir := path.Dir(file)
-	readURI := func(uri string) ([]byte, error) { return fs.ReadFile(fsys, path.Join(dir, uri)) }
-	return buildModel(meshes, materials, name, doc, readURI)
+	readURI := func(uri string) ([]byte, error) { return fs.ReadFile(sub, uri) }
+	return decodeModel(name, doc, readURI)
 }
 
-// buildModel uploads meshes + materials and assembles the node tree. readURI
-// resolves external (non-embedded, non-bufferView) image URIs to bytes.
-func buildModel(meshes *MeshRegistry, materials *MaterialRegistry, name string, doc *gltf.Document, readURI func(string) ([]byte, error)) (*Model, error) {
-	if meshes == nil || materials == nil {
-		return nil, fmt.Errorf("render3d: nil registry")
-	}
+// decodeModel does all the CPU work: convert materials (decoding texture images),
+// convert every triangle primitive, and map the node tree. No registry, no GPU —
+// goroutine-safe. readURI resolves external (non-embedded, non-bufferView) image
+// URIs to bytes.
+func decodeModel(name string, doc *gltf.Document, readURI func(string) ([]byte, error)) (*ModelData, error) {
+	md := &ModelData{Name: name}
 
-	// Materials first, so primitives can reference their refs.
-	matRefs := make([]string, len(doc.Materials))
+	md.Materials = make([]Material, len(doc.Materials))
 	for i, gm := range doc.Materials {
-		ref := fmt.Sprintf("%s/mat%d", name, i)
 		mat, err := convertMaterial(doc, gm, readURI)
 		if err != nil {
 			return nil, fmt.Errorf("render3d: material %d: %w", i, err)
 		}
-		if err := materials.Load(ref, mat); err != nil {
-			return nil, err
-		}
-		matRefs[i] = ref
+		md.Materials[i] = mat
 	}
 
-	// Meshes: one engine mesh per glTF primitive. Track each glTF mesh's
-	// primitive refs so nodes can reference them.
-	meshPrims := make([][]primRef, len(doc.Meshes))
+	// Meshes: one engine mesh per glTF primitive. Record, per glTF mesh, the
+	// decodedMesh indices its primitives produced so nodes can reference them.
+	meshPrimIdx := make([][]int, len(doc.Meshes))
 	for mi, gmesh := range doc.Meshes {
 		for pi, prim := range gmesh.Primitives {
 			if prim.Mode != gltf.PrimitiveTriangles {
@@ -104,29 +174,26 @@ func buildModel(meshes *MeshRegistry, materials *MaterialRegistry, name string, 
 			if err != nil {
 				return nil, fmt.Errorf("render3d: mesh %d primitive %d: %w", mi, pi, err)
 			}
-			ref := fmt.Sprintf("%s/mesh%d_prim%d", name, mi, pi)
-			if err := meshes.Load(ref, mesh); err != nil {
-				return nil, err
+			matIdx := -1
+			if prim.Material != nil && *prim.Material < len(md.Materials) {
+				matIdx = *prim.Material
 			}
-			matRef := ""
-			if prim.Material != nil && *prim.Material < len(matRefs) {
-				matRef = matRefs[*prim.Material]
-			}
-			meshPrims[mi] = append(meshPrims[mi], primRef{mesh: ref, material: matRef})
+			idx := len(md.Meshes)
+			md.Meshes = append(md.Meshes, decodedMesh{mesh: mesh, materialIdx: matIdx, meshIdx: mi, primIdx: pi})
+			meshPrimIdx[mi] = append(meshPrimIdx[mi], idx)
 		}
 	}
 
-	// Nodes -> ModelNodes.
-	model := &Model{Name: name, Nodes: make([]ModelNode, len(doc.Nodes))}
+	md.Nodes = make([]decodedNode, len(doc.Nodes))
 	for i, n := range doc.Nodes {
-		mn := ModelNode{Name: n.Name, Transform: nodeTransform(n), Children: n.Children}
-		if n.Mesh != nil && *n.Mesh < len(meshPrims) {
-			for _, pr := range meshPrims[*n.Mesh] {
-				mn.MeshRefs = append(mn.MeshRefs, pr.mesh)
-				mn.MatRefs = append(mn.MatRefs, pr.material)
-			}
+		dn := decodedNode{Name: n.Name, Transform: nodeTransform(n), Children: n.Children, Skin: -1}
+		if n.Mesh != nil && *n.Mesh < len(meshPrimIdx) {
+			dn.PrimIdx = append(dn.PrimIdx, meshPrimIdx[*n.Mesh]...)
 		}
-		model.Nodes[i] = mn
+		if n.Skin != nil {
+			dn.Skin = *n.Skin
+		}
+		md.Nodes[i] = dn
 	}
 
 	// Roots from the active scene (default 0).
@@ -135,12 +202,67 @@ func buildModel(meshes *MeshRegistry, materials *MaterialRegistry, name string, 
 		sceneIdx = *doc.Scene
 	}
 	if sceneIdx < len(doc.Scenes) {
-		model.Roots = doc.Scenes[sceneIdx].Nodes
+		md.Roots = doc.Scenes[sceneIdx].Nodes
+	}
+
+	var err error
+	if md.Skins, err = parseSkins(doc); err != nil {
+		return nil, err
+	}
+	if md.Animations, err = parseAnimations(doc); err != nil {
+		return nil, err
+	}
+	return md, nil
+}
+
+// upload performs the GPU phase on the main thread: it registers each material
+// and mesh under name-prefixed refs (the same name/matN, name/meshM_primP format
+// the synchronous loader has always used, so persisted scene refs are stable) and
+// assembles the *Model node tree. Call after the render3d plugin's Build.
+func (md *ModelData) upload(meshes *MeshRegistry, materials *MaterialRegistry) (*Model, error) {
+	if meshes == nil || materials == nil {
+		return nil, fmt.Errorf("render3d: nil registry")
+	}
+
+	matRefs := make([]string, len(md.Materials))
+	for i, mat := range md.Materials {
+		ref := fmt.Sprintf("%s/mat%d", md.Name, i)
+		if err := materials.Load(ref, mat); err != nil {
+			return nil, err
+		}
+		matRefs[i] = ref
+	}
+
+	meshRefs := make([]string, len(md.Meshes))
+	for i, dm := range md.Meshes {
+		ref := fmt.Sprintf("%s/mesh%d_prim%d", md.Name, dm.meshIdx, dm.primIdx)
+		if err := meshes.Load(ref, dm.mesh); err != nil {
+			return nil, err
+		}
+		meshRefs[i] = ref
+	}
+
+	model := &Model{
+		Name:       md.Name,
+		Nodes:      make([]ModelNode, len(md.Nodes)),
+		Roots:      md.Roots,
+		Animations: md.Animations,
+		Skins:      md.Skins,
+	}
+	for i, dn := range md.Nodes {
+		mn := ModelNode{Name: dn.Name, Transform: dn.Transform, Children: dn.Children, Skin: dn.Skin}
+		for _, di := range dn.PrimIdx {
+			mn.MeshRefs = append(mn.MeshRefs, meshRefs[di])
+			matRef := ""
+			if mi := md.Meshes[di].materialIdx; mi >= 0 {
+				matRef = matRefs[mi]
+			}
+			mn.MatRefs = append(mn.MatRefs, matRef)
+		}
+		model.Nodes[i] = mn
 	}
 	return model, nil
 }
-
-type primRef struct{ mesh, material string }
 
 // convertPrimitive reads a glTF primitive's attributes into an engine Mesh,
 // synthesizing normals/indices/tangents when the asset omits them.
@@ -170,6 +292,18 @@ func convertPrimitive(doc *gltf.Document, prim *gltf.Primitive) (*Mesh, error) {
 	var tangents [][4]float32
 	if idx, ok := prim.Attributes[gltf.TANGENT]; ok {
 		if tangents, err = modeler.ReadTangent(doc, doc.Accessors[idx], nil); err != nil {
+			return nil, err
+		}
+	}
+	var joints [][4]uint16
+	if idx, ok := prim.Attributes[gltf.JOINTS_0]; ok {
+		if joints, err = modeler.ReadJoints(doc, doc.Accessors[idx], nil); err != nil {
+			return nil, err
+		}
+	}
+	var weights [][4]float32
+	if idx, ok := prim.Attributes[gltf.WEIGHTS_0]; ok {
+		if weights, err = modeler.ReadWeights(doc, doc.Accessors[idx], nil); err != nil {
 			return nil, err
 		}
 	}
@@ -205,6 +339,29 @@ func convertPrimitive(doc *gltf.Document, prim *gltf.Primitive) (*Mesh, error) {
 	}
 	if len(tangents) == 0 {
 		computeTangents(mesh)
+	}
+
+	// Skinned primitive: pair each (now-final) vertex with its joints + weights so
+	// MeshRegistry.Load uploads the skinned vertex layout. Vertices is kept too
+	// (bind pose) for bounds and picking.
+	if len(joints) > 0 && len(weights) > 0 {
+		mesh.SkinVertices = make([]SkinVertex, n)
+		for i := 0; i < n; i++ {
+			v := mesh.Vertices[i]
+			sv := SkinVertex{
+				PX: v.PX, PY: v.PY, PZ: v.PZ,
+				NX: v.NX, NY: v.NY, NZ: v.NZ,
+				U: v.U, V: v.V,
+				TX: v.TX, TY: v.TY, TZ: v.TZ, TW: v.TW,
+			}
+			if i < len(joints) {
+				sv.J0, sv.J1, sv.J2, sv.J3 = joints[i][0], joints[i][1], joints[i][2], joints[i][3]
+			}
+			if i < len(weights) {
+				sv.W0, sv.W1, sv.W2, sv.W3 = weights[i][0], weights[i][1], weights[i][2], weights[i][3]
+			}
+			mesh.SkinVertices[i] = sv
+		}
 	}
 	return mesh, nil
 }

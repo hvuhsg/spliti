@@ -1,7 +1,9 @@
 package render3d
 
 import (
+	"encoding/json"
 	"testing"
+	"testing/fstest"
 
 	"github.com/qmuntal/gltf"
 	"github.com/qmuntal/gltf/modeler"
@@ -37,6 +39,41 @@ func buildTestDoc() *gltf.Document {
 	doc.Scenes = []*gltf.Scene{{Nodes: []int{0}}}
 	doc.Scene = gltf.Index(0)
 	return doc
+}
+
+// TestDecodeGLTFFSResolvesBuffersFromSubdir guards a regression: a glTF's
+// external buffer/image URIs are relative to the glTF file, but gltf.NewDecoderFS
+// resolves them against the fs.FS root. A model embedded under a subdirectory
+// (e.g. assets/model.gltf referencing model.bin) failed to load until
+// DecodeGLTFFS rooted a sub-FS at the glTF's directory.
+func TestDecodeGLTFFSResolvesBuffersFromSubdir(t *testing.T) {
+	doc := buildTestDoc()
+	// Externalize the single buffer to a sibling .bin referenced by a bare URI,
+	// mimicking a real exported glTF (e.g. the SimpleSkin sample).
+	binData := doc.Buffers[0].Data
+	doc.Buffers[0].ByteLength = len(binData)
+	doc.Buffers[0].URI = "tri.bin"
+	doc.Buffers[0].Data = nil
+
+	gltfJSON, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal glTF: %v", err)
+	}
+
+	// Place the model in a subdirectory; the .bin URI is relative to the glTF,
+	// not the FS root — the exact case this guards against.
+	fsys := fstest.MapFS{
+		"assets/tri.gltf": {Data: gltfJSON},
+		"assets/tri.bin":  {Data: binData},
+	}
+
+	md, err := DecodeGLTFFS("tri", fsys, "assets/tri.gltf")
+	if err != nil {
+		t.Fatalf("DecodeGLTFFS from subdir: %v", err)
+	}
+	if len(md.Meshes) != 1 {
+		t.Fatalf("got %d meshes, want 1", len(md.Meshes))
+	}
 }
 
 func TestConvertPrimitive(t *testing.T) {

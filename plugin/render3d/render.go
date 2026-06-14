@@ -27,11 +27,12 @@ const (
 
 // renderItem is one collected drawable before grouping.
 type renderItem struct {
-	mesh     string
-	material string
-	model    m.Mat4
-	color    m.Vec4  // per-instance tint (default white when no InstanceColor)
-	depth    float32 // squared camera distance, used to sort the transparent pass
+	mesh        string
+	material    string
+	model       m.Mat4
+	color       m.Vec4  // per-instance tint (default white when no InstanceColor)
+	depth       float32 // squared camera distance, used to sort the transparent pass
+	jointOffset uint32  // byte offset into the joint buffer (skinned items only)
 }
 
 // instanceData is the per-instance GPU record: a model matrix followed by an
@@ -56,7 +57,11 @@ type meshBatch struct {
 func installSystems(a *app.App) {
 	a.AddSystems(schedule.First, app.System(pollInput).Label(inputLabel))
 	a.AddSystems(schedule.PostUpdate,
-		app.System(propagateTransforms).Label(transformLabel).Before(renderLabel))
+		app.System(advanceAnimations).Label(animLabel).Before(transformLabel))
+	a.AddSystems(schedule.PostUpdate,
+		app.System(newPropagateTransforms()).Label(transformLabel).Before(renderLabel))
+	a.AddSystems(schedule.PostUpdate,
+		app.System(computeJointMatrices).Label(jointLabel).After(transformLabel).Before(renderLabel))
 	a.AddSystems(schedule.PostUpdate,
 		app.System(applyCameraEntity).Label(cameraLabel).After(transformLabel).Before(frameLabel))
 	a.AddSystems(schedule.PostUpdate,
@@ -341,9 +346,15 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder, cam *Camera3D,
 		return
 	}
 	world := c.World()
-	matRefMap := generic.NewMap[MaterialRef](world)
-	colorMap := generic.NewMap[InstanceColor](world)
-	transparentMap := generic.NewMap[Transparent](world)
+	if !d.mapsReady {
+		d.matRefMap = generic.NewMap[MaterialRef](world)
+		d.colorMap = generic.NewMap[InstanceColor](world)
+		d.transparentMap = generic.NewMap[Transparent](world)
+		d.skinnedMap = generic.NewMap[SkinnedMesh](world)
+		d.mapsReady = true
+	}
+	matRefMap, colorMap, transparentMap := d.matRefMap, d.colorMap, d.transparentMap
+	skinnedMap := d.skinnedMap
 
 	// Build the frustum once per frame from the same view/projection the shader
 	// uses, then cull each entity by its world-space bounding sphere below.
@@ -354,16 +365,11 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder, cam *Camera3D,
 
 	d.items = d.items[:0]
 	d.tItems = d.tItems[:0]
+	d.skinnedItems = d.skinnedItems[:0]
 	app.Query2[MeshRenderer, GlobalTransform](c, func(e ecs.Entity, mr *MeshRenderer, gt *GlobalTransform) {
 		gm := meshes.get(mr.Mesh)
 		if gm == nil {
 			return // unknown mesh: skip
-		}
-		if cull {
-			center := transformPoint(gt.Matrix, gm.boundsCenter)
-			if !d.frustum.sphereInside(center, gm.boundsRadius*maxAxisScale(gt.Matrix)) {
-				return // outside the view frustum: skip
-			}
 		}
 		mat := ""
 		if matRefMap.Has(e) {
@@ -372,6 +378,19 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder, cam *Camera3D,
 		col := m.Vec4{X: 1, Y: 1, Z: 1, W: 1}
 		if colorMap.Has(e) {
 			col = colorMap.Get(e).orWhite()
+		}
+		// Skinned meshes deform per-frame, so their bind-pose bounds are unreliable
+		// for culling — always draw them, on the dedicated skinned pipeline.
+		if gm.skinned && skinnedMap.Has(e) {
+			it := renderItem{mesh: mr.Mesh, material: mat, model: gt.Matrix, color: col, jointOffset: skinnedMap.Get(e).jointOffset}
+			d.skinnedItems = append(d.skinnedItems, it)
+			return
+		}
+		if cull {
+			center := transformPoint(gt.Matrix, gm.boundsCenter)
+			if !d.frustum.sphereInside(center, gm.boundsRadius*maxAxisScale(gt.Matrix)) {
+				return // outside the view frustum: skip
+			}
 		}
 		it := renderItem{mesh: mr.Mesh, material: mat, model: gt.Matrix, color: col}
 		if transparentMap.Has(e) {
@@ -397,6 +416,13 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder, cam *Camera3D,
 	// as a single instance appended after the opaque records.
 	sort.SliceStable(d.tItems, func(i, j int) bool { return d.tItems[i].depth > d.tItems[j].depth })
 	for _, it := range d.tItems {
+		d.scratch = append(d.scratch, instanceData{model: it.model, color: it.color})
+	}
+
+	// Skinned instances are appended last; each draws on its own with the model
+	// matrix the joint matrices were made relative to.
+	skinnedBase := len(d.scratch)
+	for _, it := range d.skinnedItems {
 		d.scratch = append(d.scratch, instanceData{model: it.model, color: it.color})
 	}
 
@@ -451,6 +477,27 @@ func drawMeshes(c *app.Ctx, g *GPU, pass *wgpu.RenderPassEncoder, cam *Camera3D,
 			mat := materials.get(it.material)
 			off := uint64((opaqueCount + i) * instanceStride)
 			pass.SetBindGroup(1, mat.bindGroup, nil)
+			pass.SetVertexBuffer(0, gm.vbuf, 0, gm.vbufSize)
+			pass.SetVertexBuffer(1, d.instanceBuf, off, uint64(instanceStride))
+			pass.SetIndexBuffer(gm.ibuf, wgpu.IndexFormatUint32, 0, gm.ibufSize)
+			pass.DrawIndexed(gm.indexCount, 1, 0, 0, 0)
+		}
+	}
+
+	// Skinned draws: the skinned pipeline (group-0 frame bind group stays bound),
+	// each with its own material (group 1) and joint block (group 2, selected by a
+	// dynamic offset). One DrawIndexed per skinned mesh — no instancing.
+	if len(d.skinnedItems) > 0 && g.jointBindGroup != nil {
+		pass.SetPipeline(g.skinnedPipeline)
+		for i, it := range d.skinnedItems {
+			gm := meshes.get(it.mesh)
+			if gm == nil || !gm.skinned {
+				continue
+			}
+			mat := materials.get(it.material)
+			off := uint64((skinnedBase + i) * instanceStride)
+			pass.SetBindGroup(1, mat.bindGroup, nil)
+			pass.SetBindGroup(2, g.jointBindGroup, []uint32{it.jointOffset})
 			pass.SetVertexBuffer(0, gm.vbuf, 0, gm.vbufSize)
 			pass.SetVertexBuffer(1, d.instanceBuf, off, uint64(instanceStride))
 			pass.SetIndexBuffer(gm.ibuf, wgpu.IndexFormatUint32, 0, gm.ibufSize)
