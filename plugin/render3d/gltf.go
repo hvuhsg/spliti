@@ -120,17 +120,29 @@ func DecodeGLTF(name, file string) (*ModelData, error) {
 // DecodeGLTFFS is DecodeGLTF reading from an fs.FS. Like DecodeGLTF it performs
 // no GPU work.
 func DecodeGLTFFS(name string, fsys fs.FS, file string) (*ModelData, error) {
-	f, err := fsys.Open(file)
+	// Buffer/image URIs in a glTF are relative to the glTF file, but
+	// gltf.NewDecoderFS resolves them against fsys's root. Root a sub-FS at the
+	// glTF's directory so external .bin buffers (and textures) load whether the
+	// model sits at the FS root or in a subdirectory (e.g. embedded assets/).
+	dir, base := path.Dir(file), path.Base(file)
+	sub := fsys
+	if dir != "." {
+		s, err := fs.Sub(fsys, dir)
+		if err != nil {
+			return nil, fmt.Errorf("render3d: open glTF %q: %w", file, err)
+		}
+		sub = s
+	}
+	f, err := sub.Open(base)
 	if err != nil {
 		return nil, fmt.Errorf("render3d: open glTF %q: %w", file, err)
 	}
 	defer f.Close()
 	doc := new(gltf.Document)
-	if err := gltf.NewDecoderFS(f, fsys).Decode(doc); err != nil {
+	if err := gltf.NewDecoderFS(f, sub).Decode(doc); err != nil {
 		return nil, fmt.Errorf("render3d: decode glTF %q: %w", file, err)
 	}
-	dir := path.Dir(file)
-	readURI := func(uri string) ([]byte, error) { return fs.ReadFile(fsys, path.Join(dir, uri)) }
+	readURI := func(uri string) ([]byte, error) { return fs.ReadFile(sub, uri) }
 	return decodeModel(name, doc, readURI)
 }
 
