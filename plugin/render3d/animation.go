@@ -290,14 +290,16 @@ func parseSkins(doc *gltf.Document) ([]Skin, error) {
 	return out, nil
 }
 
-// mat4FromGLTF converts a glTF accessor matrix ([col][row], column-major) into the
-// engine's column-major m.Mat4 (index c*4+r). Both are column-major, so this is a
-// straight transcription.
+// mat4FromGLTF converts a glTF accessor matrix into the engine's column-major
+// m.Mat4 (index c*4+r). The gltf modeler returns each matrix as a Go [4][4]
+// indexed [row][col], so the conversion transposes: out[c*4+r] = mm[r][c]. (The
+// engine is column-major; reading mm as if it were [col][row] yields the
+// transpose, which silently breaks skinning for any non-symmetric joint.)
 func mat4FromGLTF(mm [4][4]float32) m.Mat4 {
 	var out m.Mat4
 	for c := 0; c < 4; c++ {
 		for r := 0; r < 4; r++ {
-			out[c*4+r] = mm[c][r]
+			out[c*4+r] = mm[r][c]
 		}
 	}
 	return out
