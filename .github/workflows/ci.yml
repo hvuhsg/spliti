@@ -53,15 +53,19 @@ jobs:
 
       # glfw needs OpenGL + X11 dev headers; cimgui-go needs a C++ compiler
       # (g++ is preinstalled); oto needs ALSA dev headers for the Linux backend.
+      # The .deb archives are cached so reruns skip the (slow) download; only the
+      # local dpkg install runs. Cache key is the package list, so it auto-busts
+      # when the set below changes.
       - name: Install system libraries (Linux)
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc g++ pkg-config \
-            libgl1-mesa-dev xorg-dev \
-            libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libxxf86vm-dev \
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: >-
+            gcc g++ pkg-config
+            libgl1-mesa-dev xorg-dev
+            libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libxxf86vm-dev
             libasound2-dev
+          version: 1.0
 
       - name: go build ./...
         run: go build ./...
