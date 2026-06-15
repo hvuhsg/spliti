@@ -3,9 +3,13 @@
 package ui
 
 import (
+	"image"
+	"image/draw"
+
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/cogentcore/webgpu/wgpu"
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/render3d"
 )
 
 // WantCaptureMouse reports whether ImGui wants the mouse this frame (the pointer
@@ -101,17 +105,80 @@ func UpdateTexture(c *app.Ctx, id imgui.TextureID, view *wgpu.TextureView) {
 	te.bg = bg
 }
 
-// UnregisterTexture releases an id from RegisterTexture. The caller-owned view
-// itself is not touched. No-op for unknown or ImGui-managed ids.
+// UnregisterTexture releases an id from RegisterTexture or NewImageTexture. For
+// a RegisterTexture id the caller-owned view is not touched; for a
+// NewImageTexture id the owned GPU texture is freed. No-op for unknown or
+// ImGui-managed (font-atlas) ids.
 func UnregisterTexture(c *app.Ctx, id imgui.TextureID) {
 	b := app.GetResource[Backend](c)
 	if b == nil {
 		return
 	}
 	te := b.textures[id]
-	if te == nil || te.tex != nil {
-		return
+	if te == nil || (te.tex != nil && !te.userOwned) {
+		return // font-atlas texture: ImGui owns its lifecycle
 	}
 	te.release()
 	delete(b.textures, id)
+}
+
+// NewImageTexture uploads a CPU image to the GPU and returns a TextureID
+// drawable with imgui.Image — the seam an asset panel uses to preview a PNG/JPG
+// or a color swatch. The pixels are copied, so the caller may reuse img. Free it
+// with UnregisterTexture. Returns 0 if the UI/GPU isn't ready yet.
+func NewImageTexture(c *app.Ctx, img image.Image) imgui.TextureID {
+	b := app.GetResource[Backend](c)
+	if b == nil || img == nil || !b.ensureGPU(c) {
+		return 0
+	}
+	rgba := toRGBA(img)
+	w, h := int32(rgba.Rect.Dx()), int32(rgba.Rect.Dy())
+	if w <= 0 || h <= 0 {
+		return 0
+	}
+	dev := render3d.Device(c)
+	tex, err := dev.CreateTexture(&wgpu.TextureDescriptor{
+		Label:         "spliti.ui.image.tex",
+		Usage:         wgpu.TextureUsageTextureBinding | wgpu.TextureUsageCopyDst,
+		Dimension:     wgpu.TextureDimension2D,
+		Size:          wgpu.Extent3D{Width: uint32(w), Height: uint32(h), DepthOrArrayLayers: 1},
+		Format:        wgpu.TextureFormatRGBA8UnormSrgb,
+		MipLevelCount: 1,
+		SampleCount:   1,
+	})
+	if err != nil {
+		return 0
+	}
+	view, err := tex.CreateView(nil)
+	if err != nil {
+		tex.Release()
+		return 0
+	}
+	_ = render3d.Queue(c).WriteTexture(
+		tex.AsImageCopy(),
+		rgba.Pix,
+		&wgpu.TextureDataLayout{Offset: 0, BytesPerRow: uint32(rgba.Stride), RowsPerImage: uint32(h)},
+		&wgpu.Extent3D{Width: uint32(w), Height: uint32(h), DepthOrArrayLayers: 1},
+	)
+	bg, err := b.bgl1Group(c, view)
+	if err != nil {
+		view.Release()
+		tex.Release()
+		return 0
+	}
+	id := imgui.TextureID(b.nextTexID)
+	b.nextTexID++
+	b.textures[id] = &texEntry{tex: tex, view: view, bg: bg, w: w, h: h, userOwned: true}
+	return id
+}
+
+// toRGBA returns img as an *image.RGBA, copying only when it is not already one.
+func toRGBA(img image.Image) *image.RGBA {
+	if r, ok := img.(*image.RGBA); ok {
+		return r
+	}
+	b := img.Bounds()
+	dst := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(dst, dst.Bounds(), img, b.Min, draw.Src)
+	return dst
 }

@@ -112,16 +112,18 @@ func drawShell(c *app.Ctx, st *state) {
 		var left, right, bottom, lower, center imgui.ID
 		imgui.InternalDockBuilderSplitNode(dockID, imgui.DirLeft, 0.2, &left, &center)
 		imgui.InternalDockBuilderSplitNode(center, imgui.DirRight, 0.28, &right, &center)
-		imgui.InternalDockBuilderSplitNode(center, imgui.DirDown, 0.25, &lower, &center)
+		imgui.InternalDockBuilderSplitNode(center, imgui.DirDown, 0.32, &lower, &center)
 		imgui.InternalDockBuilderSplitNode(left, imgui.DirDown, 0.35, &bottom, &left)
 		imgui.InternalDockBuilderDockWindow("Hierarchy", left)
-		imgui.InternalDockBuilderDockWindow("Assets", bottom)
 		imgui.InternalDockBuilderDockWindow("Systems", bottom)
 		imgui.InternalDockBuilderDockWindow("Layers", bottom)
 		imgui.InternalDockBuilderDockWindow("Input", bottom)
 		imgui.InternalDockBuilderDockWindow("Inspector", right)
 		imgui.InternalDockBuilderDockWindow("Console", lower)
 		imgui.InternalDockBuilderDockWindow("Terminal", lower)
+		// Assets shares the bottom-center node with Console/Terminal — the grid of
+		// thumbnails wants the width — and is the frontmost tab there by default.
+		imgui.InternalDockBuilderDockWindow("Assets", lower)
 		imgui.InternalDockBuilderDockWindow("Scene", center)
 		imgui.InternalDockBuilderDockWindow("Game", center)
 		imgui.InternalDockBuilderFinish(dockID)

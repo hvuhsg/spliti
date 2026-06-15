@@ -56,6 +56,19 @@ func newMeshRegistry(g *GPU) *MeshRegistry {
 	return &MeshRegistry{gpu: g, byRef: make(map[string]*meshGPU)}
 }
 
+// LoadOBJFile decodes an OBJ file from disk and registers it under ref in one
+// call — the disk-path counterpart of audio.Registry.LoadFS. The editor's asset
+// importer writes a must(meshes.LoadOBJFile(ref, "game/assets/x.obj")) line into
+// LoadAssets for each imported model, so a single statement both decodes and
+// registers it.
+func (r *MeshRegistry) LoadOBJFile(ref, file string) error {
+	mesh, err := LoadOBJ(file)
+	if err != nil {
+		return err
+	}
+	return r.Load(ref, mesh)
+}
+
 // Load uploads a mesh to the GPU under ref, replacing any existing mesh for that
 // ref. Call after the plugin's Build (i.e. from Startup or later), since it needs
 // the device.

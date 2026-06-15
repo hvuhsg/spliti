@@ -48,9 +48,21 @@ User-reported issues and requests (2026-06-13), plus previously deferred follow-
    Added `MeshRegistry.Keys()` / `MaterialRegistry.Keys()` (sorted) and an inspector combo for
    `MeshRenderer.Mesh` and `MaterialRef.Material`: pick from registered keys, "(none)" clears the
    ref (registry falls back to its default), and an unregistered current value stays visible.
-6. **Asset thumbnail previews** in the Assets panel.
-7. **Drag-in asset import** — dragging files (models, textures, …) from the OS into the editor
-   should copy them into `assets/` and register them.
+6. **Asset thumbnail previews** in the Assets panel. **Done (partial).** The Assets panel now has
+   a browser with previews: a live render-to-texture pane for the selected model/material (turntable,
+   offscreen `SceneView`), image thumbnails (`ui.NewImageTexture`), audio waveforms + Play
+   (`audio.DecodeWaveform`), and material color swatches. See the asset-panel follow-ups below for
+   per-tile thumbnails and preview lighting.
+7. **Drag-in asset import** — ~~dragging files (models, textures, …) from the OS into the editor
+   should copy them into `assets/` and register them.~~ **Done (partial).** A `glfw.SetDropCallback`
+   (editor/drop.go) queues OS-dropped paths, drained on the main thread into `importAssetFile`
+   (editor/assetimport.go), which copies the file into `game/assets/`. **Models (.obj)** and
+   **materials** are fully wired (code-as-truth): import loads the asset live *and* writes a
+   registration line into the `//spliti:assets` `LoadAssets` function via a new `srcmodel.AssetsFile`
+   round-trip (mirrors `InputFile`/`LayersFile`), raising the rebuild banner. Drag a model into the
+   Scene viewport to spawn it (built-in `render3d.NewMesh` prefab) or onto a `MeshRenderer.Mesh` /
+   `MaterialRef.Material` combo to set the ref. **Images (.png/.jpg) and audio (.wav/.mp3/.ogg)** are
+   copied + previewed only (not code-registered); **glTF/.glb** is copied only. See follow-ups below.
 8. **Collider visualization + editing** — ~~show the collider wireframe in the viewport~~ and allow
    editing its transform/extents there (gizmo on the collider, not just the entity transform).
    **Visualization done.** `drawColliderBoxes` (editor/aids.go) outlines every `collision.Collider3D`
@@ -105,6 +117,71 @@ User-reported issues and requests (2026-06-13), plus previously deferred follow-
     `streamCommandEnv`, factored out of `streamCommand` so wasm can set `GOOS=js GOARCH=wasm`);
     `checkExport` (schedule.First) reports the outcome. The native binary is named after the project
     dir to avoid colliding with the scaffold's `game/` package directory.
+
+## Asset panel follow-ups
+
+Deferred from the Assets-panel work (items 6 & 7 above). The infrastructure
+(`srcmodel.AssetsFile`, the import pipeline, the preview pane, the
+`assetDragType` drag/drop) is in place; these extend its coverage and polish.
+
+**Asset-type coverage**
+
+1. **glTF/GLB import.** Today `.gltf`/`.glb` files are copied but not registered (a glTF is a
+   multi-mesh Model with its own materials/skins, not a single mesh key). Wire it end to end:
+   register via the async `AssetLoader.LoadModelAsync`, generate a `LoadAssets` line, and spawn via
+   `render3d.SpawnModel` (a new built-in "model prefab", analogous to the `render3d.NewMesh` mesh
+   prefab). Then it previews and drag-spawns like an OBJ.
+2. **Image assets become first-class.** render3d has no standalone texture registry — images are only
+   used as material textures (`Material.BaseColorTex` etc.), which are `image.Image` fields, not
+   string refs. Options: (a) a "Create material from image" action that writes a `materials.Load` line
+   with the texture loaded from disk (needs a `Material` texture-path constructor / loader helper), or
+   (b) a real `render3d.TextureRegistry` with string refs that materials reference by key. Until then,
+   images are preview-only.
+3. **Audio registration code-gen.** Audio import is preview + play only because the audio plugin (and
+   its `audio.Registry` resource) isn't always present (the testgame editor has none). When it is,
+   generate a registration line — needs a disk-path loader like `audio.Registry.LoadFile(ref, path)`
+   (today only `LoadFS`/`Load([]byte)` exist) and a `//spliti:assets`-style hook the game opts into.
+   Gate the code-gen on the registry resource being present so it never emits uncompilable code.
+
+**Preview quality**
+
+4. ~~**Per-tile 3D thumbnails.**~~ **Done.** The Assets panel is now a thumbnail **grid**
+   (`assetGrid`/`assetTile` in editor/assets.go): models show a rendered 3D thumbnail, materials a
+   color swatch, images their picture, audio a placeholder. Mesh thumbnails build lazily one at a
+   time (editor/assetthumb.go): each mesh renders once into its own small offscreen
+   `RenderTarget`+`SceneView` off a shared far-parked entity, then the view is disabled so the target
+   freezes as a static image. Invalidated on re-import (`invalidateThumb`). The Assets panel also now
+   defaults to the bottom-center dock node, **tabbed with Console/Terminal** (layoutVersion bumped).
+   Tiles `PushID` per (kind,key) so identically-named assets (e.g. a mesh and a material both named
+   `marker`) no longer collide in ImGui's ID stack. **Still open:** thumbnails don't yet rebuild on
+   external hot-reload of an unchanged key; preview lighting (#5) still applies.
+5. **Preview lighting / environment.** The preview pane reuses the scene's lights via a hidden entity
+   at `previewOrigin={0,1e5,0}`; in a scene with only nearby point lights the preview is dark. Give
+   the preview its own light/environment without polluting the world — cleanest via a **separate
+   editor-only preview world or render path** (see #8), avoiding the far-offset-entity hack and the
+   reserved `__preview_sphere` mesh that currently has to be filtered from asset lists.
+
+**Lifecycle & UX**
+
+6. **Mesh live-unload for clean undo.** `MeshRegistry` has no `Unload`, so undoing a mesh import
+   removes the source line but leaves the GPU mesh resident until restart. Add `MeshRegistry.Unload`
+   (mirroring `audio.Registry.Unload`) so `cmdImportMesh.Undo` fully reverses.
+7. **Delete / rename assets from the panel.** `AssetsFile.Remove` only handles single-statement
+   entries (a `LoadOBJFile` mesh or a material); a mesh loaded via a shared local var (the scaffold's
+   traced `teapot, err := LoadOBJ(...)` form) is refused. Support removing those (drop the loader
+   assignment + its `must(err)` too), add rename, and optionally delete the underlying file (with
+   confirmation).
+8. **Dedicated preview render path / world.** Replace the far-offset preview entity + reserved sphere
+   with a small `render3d` primitive that renders a single mesh+material to a target with a given
+   camera and light (e.g. `render3d.RenderPreview`). Removes the world pollution, the `"__"` key
+   filtering, and the lighting caveat in #5 — at the cost of a bit of render3d plumbing (a one-item
+   `drawState`).
+9. **Panel polish.** Filter/search box; a grid layout with larger thumbnails; per-asset metadata
+   (file size, image dimensions, audio duration/channels); a waveform playhead/scrub; and a focus on
+   the material editor when "+ New Material" creates one.
+10. **Generic asset-path field drops.** Only the `MeshRenderer.Mesh` / `MaterialRef.Material` combos
+    are drop targets today. Let an image/audio asset be dropped onto any plain `string` field that
+    holds an asset path (heuristic by field name/kind), for game components with their own ref fields.
 
 ## Previously deferred (from M4)
 

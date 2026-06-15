@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/AllenDang/cimgui-go/imgui"
@@ -178,13 +179,57 @@ type state struct {
 	// deactivates after an edit.
 	editBefore map[string]any
 
+	// assets (//spliti:assets LoadAssets function; optional). Meshes and
+	// materials registered there are listed, previewed, and appended to when a
+	// file is imported.
+	assets    *srcmodel.AssetsFile
+	assetsErr error
+	// dropQueue holds OS file-drop paths captured by the glfw drop callback (on a
+	// non-main goroutine), drained into importAssetFile in schedule.First.
+	dropMu    sync.Mutex
+	dropQueue []string
+
+	// asset preview pane: one reusable offscreen pass showing the selected model
+	// (or a material on a sphere) on a turntable. The preview entity lives far
+	// from the scene so the tight preview camera frames only it.
+	selAsset   string // asset key selected in the panel
+	prevRT     *render3d.RenderTarget
+	prevView   *render3d.SceneView
+	prevTexID  imgui.TextureID
+	prevEntity ecs.Entity
+	prevCam    *render3d.Camera3D
+	prevShown  string  // asset key currently bound to the preview entity
+	prevYaw    float32 // turntable angle
+	// asset 2D preview caches: image thumbnails and material swatches uploaded as
+	// ImGui textures, keyed by asset key; waveforms keyed by audio asset key.
+	assetTex  map[string]imgui.TextureID
+	waveCache map[string]waveform
+	newMatBuf string                           // "+ New Material" name buffer
+	matStage  map[string]srcmodel.MaterialSpec // in-progress material edits (per key)
+
+	// mesh thumbnails for the asset grid: each mesh is rendered once into its
+	// own small offscreen target, then frozen (the view is disabled, the target
+	// keeps the image). Built one at a time (thumbBuilding) off a shared
+	// far-away entity/camera so each tile shows only its mesh.
+	thumbs        map[string]*assetThumb
+	thumbCam      *render3d.Camera3D
+	thumbEntity   ecs.Entity
+	thumbBuilding string
+
 	// UI transients
-	dragPrefab    string // prefab name being dragged from the Assets panel
-	dragInstance  string // instance being dragged in the hierarchy
-	renameTarget  string // instance the rename popup edits ("" = closed)
+	dragPrefab    string       // prefab name being dragged from the Assets panel
+	dragAsset     draggedAsset // asset being dragged from the Assets panel
+	dragInstance  string       // instance being dragged in the hierarchy
+	renameTarget  string       // instance the rename popup edits ("" = closed)
 	renameBuf     string
 	addCompFilter string
 	aabbMeshCache map[string][2]m.Vec3 // mesh ref → model-space AABB
+}
+
+// draggedAsset is the asset (key + kind) being dragged from the Assets panel.
+type draggedAsset struct {
+	key  string
+	kind srcmodel.AssetKind
 }
 
 const writebackDebounce = 500 * time.Millisecond
@@ -210,6 +255,9 @@ func newState(p Plugin) *state {
 		eulerCache:        make(map[string][3]float32),
 		editBefore:        make(map[string]any),
 		aabbMeshCache:     make(map[string][2]m.Vec3),
+		assetTex:          make(map[string]imgui.TextureID),
+		waveCache:         make(map[string]waveform),
+		matStage:          make(map[string]srcmodel.MaterialSpec),
 		consoleAutoScroll: true,
 	}
 }
@@ -254,7 +302,9 @@ func (p Plugin) Build(a *app.App) {
 		st.loadSceneSource()
 		st.loadLayers()
 		st.loadInput()
+		st.loadAssetsModel()
 		st.startWatcher()
+		st.installDropCallback(c)
 		st.restoreSession(c)
 	})
 
@@ -280,7 +330,7 @@ func (p Plugin) Build(a *app.App) {
 		drawCameraIcons(c, st)
 		drawColliderBoxes(c)
 	})
-	a.AddSystems(schedule.First, drainWatcher, checkRebuild, checkExport, menuTick)
+	a.AddSystems(schedule.First, drainWatcher, drainDrops, checkRebuild, checkExport, menuTick)
 	a.AddSystems(schedule.Update, editorUI)
 	// stepClock must run after the game's own Last systems; it is registered
 	// later, and same-stage order follows insertion order.
@@ -313,7 +363,7 @@ func (st *state) installLayoutPersistence(io *imgui.IO) {
 
 // layoutVersion identifies the default dock layout; bump it when adding or
 // removing a docked panel so stale user layouts are rebuilt once.
-const layoutVersion = "5"
+const layoutVersion = "6"
 
 // installSmokeHooks wires the headless-verification env hooks (used by CI and
 // scripted runs; inert otherwise): SPLITI_EDITOR_FRAMES bounds the run,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"time"
 
 	mp3 "github.com/hajimehoshi/go-mp3"
 	"github.com/jfreymuth/oggvorbis"
@@ -33,6 +34,55 @@ func sniffFormat(data []byte) fileFormat {
 	default:
 		return formatUnknown
 	}
+}
+
+// DecodeWaveform decodes a WAV/OGG/MP3 file and reduces it to bins peak
+// amplitudes in [0,1] (the max absolute sample across channels in each time
+// slice) plus the clip's duration. It is the data an editor draws as a
+// waveform; bins is clamped to at least 1.
+func DecodeWaveform(data []byte, bins int) (peaks []float32, dur time.Duration, err error) {
+	pcm, channels, rate, err := decodeAll(data)
+	if err != nil {
+		return nil, 0, err
+	}
+	if channels < 1 {
+		channels = 1
+	}
+	if bins < 1 {
+		bins = 1
+	}
+	frames := len(pcm) / channels
+	if rate > 0 {
+		dur = time.Duration(float64(frames) / float64(rate) * float64(time.Second))
+	}
+	peaks = make([]float32, bins)
+	if frames == 0 {
+		return peaks, dur, nil
+	}
+	for b := 0; b < bins; b++ {
+		start := b * frames / bins
+		end := (b + 1) * frames / bins
+		if end <= start {
+			end = start + 1
+		}
+		var peak float32
+		for f := start; f < end && f < frames; f++ {
+			for ch := 0; ch < channels; ch++ {
+				v := pcm[f*channels+ch]
+				if v < 0 {
+					v = -v
+				}
+				if v > peak {
+					peak = v
+				}
+			}
+		}
+		if peak > 1 {
+			peak = 1
+		}
+		peaks[b] = peak
+	}
+	return peaks, dur, nil
 }
 
 // decodeAll fully decodes a WAV/OGG/MP3 file into interleaved float32 PCM at

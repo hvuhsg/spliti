@@ -67,6 +67,10 @@ type Spawn struct {
 	Var       string // assigned variable name; "" for `_ =` or bare-call forms
 	Prefab    string // prefab function as written, e.g. "entities.SpawnCrate"
 	Transform *Transform
+	// Args are the trailing string-literal arguments after the transform, used by
+	// the built-in mesh spawn (render3d.NewMesh(c, <xform>, "mesh", "material")).
+	// Empty for ordinary //spliti:entity prefabs, which take only (c, transform).
+	Args []string
 
 	Sets       []*SetLine    // scene.Set override lines, in source order
 	Removes    []*RemoveLine // scene.Remove[T] lines, in source order
@@ -349,6 +353,17 @@ func recognizeSpawn(stmt dst.Stmt) *Spawn {
 	}
 	if len(prefabCall.Args) >= 2 {
 		sp.Transform = parseTransformChain(prefabCall.Args[1])
+	}
+	// Trailing string-literal args (the mesh/material keys of a NewMesh spawn).
+	// Bail out to no Args if any trailing argument is not a string literal, so we
+	// never reproduce a spawn from a partial argument list.
+	for _, a := range prefabCall.Args[2:] {
+		s, ok := stringLit(a)
+		if !ok {
+			sp.Args = nil
+			break
+		}
+		sp.Args = append(sp.Args, s)
 	}
 	return sp
 }
