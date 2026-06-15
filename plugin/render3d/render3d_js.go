@@ -140,6 +140,13 @@ func installDOMInput(g *GPU, canvas js.Value) {
 			Mods: domMods(e), X: e.Get("offsetX").Float(), Y: e.Get("offsetY").Float(),
 		})
 	})
+	add(canvas, "wheel", func(e js.Value) {
+		e.Call("preventDefault")
+		// GLFW's yoff is positive scrolling up; DOM deltaY is positive scrolling
+		// down, so negate to match the native ScrollDelta convention.
+		g.scrollPendingX += e.Get("deltaX").Float()
+		g.scrollPendingY += -e.Get("deltaY").Float()
+	})
 	add(canvas, "contextmenu", func(e js.Value) { e.Call("preventDefault") })
 
 	resize := js.FuncOf(func(_ js.Value, _ []js.Value) any {
