@@ -1,0 +1,10 @@
+name = "hexisland"
+
+[window]
+title = "hexisland"
+width = 1280
+height = 720
+
+[scene]
+file = "game/scenes/main.go"
+default = "Main"
