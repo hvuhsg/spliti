@@ -12,9 +12,9 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20240506104042-037f3cc74f2a // indirect
 	github.com/qmuntal/gltf v0.28.0 // indirect
-	golang.org/x/image v0.34.0 // indirect
+	golang.org/x/image v0.38.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.32.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
 )
 
 replace github.com/hvuhsg/spliti => ../..
