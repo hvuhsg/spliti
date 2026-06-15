@@ -29,6 +29,11 @@ func drainEvents(c *app.Ctx, g *GPU) {
 		app.SendEvent(c, ev)
 	}
 	g.mouseButton = g.mouseButton[:0]
+
+	// Snapshot this frame's accumulated scroll, then clear the pending total so
+	// ScrollDelta reports only movement since the previous drain.
+	g.scrollX, g.scrollY = g.scrollPendingX, g.scrollPendingY
+	g.scrollPendingX, g.scrollPendingY = 0, 0
 }
 
 // applyResize reconfigures the surface to the new framebuffer size and rebuilds

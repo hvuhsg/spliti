@@ -68,6 +68,10 @@ func (p Plugin) Build(a *app.App) {
 			Mods: inputs.Mod(mods), X: g.cursorX, Y: g.cursorY,
 		})
 	})
+	win.SetScrollCallback(func(_ *glfw.Window, xoff, yoff float64) {
+		g.scrollPendingX += xoff
+		g.scrollPendingY += yoff
+	})
 }
 
 // pollInput runs in schedule.First on the main goroutine (required by GLFW). It

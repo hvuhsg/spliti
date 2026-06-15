@@ -178,6 +178,12 @@ type GPU struct {
 
 	cursorX, cursorY float64
 
+	// Scroll-wheel deltas. Platform callbacks accumulate into scrollPending*;
+	// drainEvents snapshots that into scroll* once per frame (and zeroes the
+	// pending) so ScrollDelta reports just this frame's movement.
+	scrollPendingX, scrollPendingY float64
+	scrollX, scrollY               float64
+
 	// Reusable per-frame scratch for light packing (camera-independent, shared
 	// by every pass) and the frame uniform contents, kept so SceneView passes
 	// can copy the light section without re-collecting.
@@ -498,4 +504,16 @@ func MouseButtonDown(c *app.Ctx, btn inputs.MouseButton) bool {
 		return false
 	}
 	return g.buttonsDown[btn]
+}
+
+// ScrollDelta returns the scroll-wheel movement accumulated this frame as
+// (x, y); y is the usual vertical wheel (positive is typically scroll-up/away,
+// matching GLFW). It is reset every frame, so poll it from an Update system.
+// Works the same on native (GLFW scroll callback) and js (DOM wheel events).
+func ScrollDelta(c *app.Ctx) (x, y float64) {
+	g := app.GetResource[GPU](c)
+	if g == nil {
+		return 0, 0
+	}
+	return g.scrollX, g.scrollY
 }
