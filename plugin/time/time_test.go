@@ -47,6 +47,56 @@ func TestFixedUpdateRunsMoreThanUpdate(t *testing.T) {
 	}
 }
 
+func TestManualClockAdvancesOneFixedStepPerFrame(t *testing.T) {
+	const step = gotime.Second / 50
+	const frames = 7
+	a := app.New().AddPlugins(splititime.Plugin{FixedTimestep: step, Manual: true})
+
+	var updateRuns, fixedRuns int
+	var lastDelta, lastElapsed gotime.Duration
+	a.AddSystems(schedule.Update, func(c *app.Ctx) {
+		updateRuns++
+		tm := app.GetResource[splititime.Time](c)
+		lastDelta, lastElapsed = tm.Delta(), tm.Elapsed()
+	})
+	a.AddSystems(schedule.FixedUpdate, func(*app.Ctx) { fixedRuns++ })
+	a.SetMaxFrames(frames).Run()
+
+	if updateRuns != frames {
+		t.Fatalf("update ran %d times, want %d", updateRuns, frames)
+	}
+	// Virtual clock: exactly one fixed step per frame, no wall-clock slop.
+	if fixedRuns != frames {
+		t.Fatalf("fixedRuns=%d, want %d (one per frame under manual clock)", fixedRuns, frames)
+	}
+	if lastDelta != step {
+		t.Fatalf("delta=%v, want exactly %v", lastDelta, step)
+	}
+	if lastElapsed != gotime.Duration(frames)*step {
+		t.Fatalf("elapsed=%v, want %v", lastElapsed, gotime.Duration(frames)*step)
+	}
+}
+
+func TestManualClockIsReproducible(t *testing.T) {
+	const step = gotime.Second / 60
+	run := func() (gotime.Duration, int) {
+		a := app.New().AddPlugins(splititime.Plugin{FixedTimestep: step, Manual: true})
+		var fixedRuns int
+		var elapsed gotime.Duration
+		a.AddSystems(schedule.FixedUpdate, func(*app.Ctx) { fixedRuns++ })
+		a.AddSystems(schedule.Update, func(c *app.Ctx) {
+			elapsed = app.GetResource[splititime.Time](c).Elapsed()
+		})
+		a.SetMaxFrames(20).Run()
+		return elapsed, fixedRuns
+	}
+	e1, f1 := run()
+	e2, f2 := run()
+	if e1 != e2 || f1 != f2 {
+		t.Fatalf("runs diverged: (%v,%d) vs (%v,%d)", e1, f1, e2, f2)
+	}
+}
+
 func TestFixedUpdateRespectsAccumulatorCap(t *testing.T) {
 	// Sanity: even after a deliberate long stall, fixed loop doesn't run forever.
 	a := app.New().AddPlugins(splititime.Plugin{FixedTimestep: gotime.Millisecond})

@@ -117,6 +117,7 @@ import (
 	"github.com/hvuhsg/spliti/plugin/inputs/actions"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
+	"github.com/hvuhsg/spliti/plugin/rng"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
 	"github.com/hvuhsg/spliti/schedule"
 
@@ -130,6 +131,10 @@ func main() {
 	a := app.New()
 	a.AddPlugins(
 		splititime.Plugin{},
+		// Seeded random source: draw game randomness from this resource
+		// (app.GetResource[rng.Rand](c)) so headless "spliti check" runs are
+		// reproducible. Pick a varying seed for run-to-run variety.
+		rng.Plugin{Seed: 1},
 		render3d.Plugin{
 			Width: 1280, Height: 720,
 			Title:   "{{.Name}}",

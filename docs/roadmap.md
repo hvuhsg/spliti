@@ -205,3 +205,54 @@ product decision (most of all the netcode model).
 3. ~~Asset pipeline: async loads + load-failure recovery~~ — done (AssetLoader)
 
 (For 2D games, sprite animation remains the top gap.)
+
+## AI track — making the engine an agent can build games with
+
+A **parallel workstream** (co-equal with the Bevy-shaped engine work above, not a
+replacement). The bet: spliti's feature surface is largely done — what's missing
+is the loop an AI agent needs to build games *unattended*: **write → run →
+observe → correct**. A human observes by looking at the screen; an agent needs
+the run to be deterministic, the world readable as data, and the frame
+capturable headless. Most of the parts already exist for the editor — these
+milestones promote them to first-class engine capabilities.
+
+Severity: 🔴 blocking the loop · 🟠 high leverage · 🟡 productization
+
+- [ ] 🔴 **AI-0 — Determinism contract** *(prerequisite, small)*. Injectable
+      **virtual clock** mode for `plugin/time` (fixed `dt`, advanced by tick
+      count, no `time.Now()`) plus a **seeded RNG resource**. The lockstep
+      netcode already proves the loop *can* be deterministic; this makes it
+      deterministic on demand. Acceptance: same game + seed + scripted inputs →
+      byte-identical world JSON after N ticks. Pairs with the wall-clock/NetClock
+      coupling item under Scalability.
+- [ ] 🔴 **AI-1 — World-state-as-data**. Public `inspect` package: dump the ECS
+      world → JSON (entities, components, resources) by generalizing
+      `editor/snapshot.go` + the `editor/registry` reflection so component
+      coverage is automatic. Pull in **Entity-reference serialization** (🟡
+      above) and align with **Runtime save/load** (🟠 above) — same serialization
+      problem. Acceptance: round-trips every component the editor inspector
+      handles; assert on a running game's state in a test.
+- [ ] 🔴 **AI-2 — Headless verification harness** *(the killer feature)*.
+      Offscreen render (no window/present; `render3d.CaptureFrame` already reads
+      back pixels) with a null-PNG fallback on GPU-less CI, a scripted-input seam
+      over `plugin/inputs`, and a new CLI verb **`spliti check`** (boot, virtual
+      clock, seed, run N ticks, write `world.json` + `frame.png`, non-zero exit
+      on a failed assertion). Acceptance: an agent edits gameplay code, re-runs
+      `spliti check`, and diffs state + frame to confirm the change — no window,
+      no human.
+- [ ] 🟠 **AI-3 — Agent context surface**. `AGENTS.md` at repo root (canonical
+      game skeleton, plugin set, schedule stages, the AI-2 verify loop as the
+      prescribed workflow) + a **generated** capability manifest (`spliti
+      manifest`: plugins, component catalog from the registry, stages, CLI verbs)
+      so it never drifts. Curate examples as few-shot templates. Acceptance: an
+      agent given only `AGENTS.md` + the manifest + AI-2 can scaffold, build, and
+      verify a small game without reading the whole tree.
+- [ ] 🟡 **AI-4 — `spliti` MCP server** *(productization)*. Wrap `new`/`gen`/
+      `run`/`build`/`check`/`inspect`/`screenshot` as MCP tools so any MCP-capable
+      agent drives the whole loop natively. Acceptance: from a fresh dir, an agent
+      builds and verifies a game using only the MCP tools.
+
+Critical path is **AI-0 → AI-1 → AI-2** — that trio *is* the agent loop;
+AI-3/AI-4 are leverage on top. The expensive-looking milestones are mostly
+assembly of code already written for the editor (snapshot, registry, screenshot,
+the deterministic netcode loop).
