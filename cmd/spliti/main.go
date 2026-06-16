@@ -4,6 +4,7 @@
 //	spliti gen                            regenerate .spliti/editor from the game source
 //	spliti edit                           gen + run the visual editor (needs cgo)
 //	spliti run                            run the game natively
+//	spliti check [flags]                  run the game headlessly and dump world state
 //	spliti build [--wasm]                 build the game binary (or wasm bundle)
 //
 // new/gen/edit/run/build all operate on the project in the current directory
@@ -35,6 +36,8 @@ func main() {
 		err = cmdEdit()
 	case "run":
 		err = run("go", "run", ".")
+	case "check":
+		err = cmdCheck(os.Args[2:])
 	case "build":
 		err = cmdBuild(os.Args[2:])
 	case "help", "-h", "--help":
@@ -56,6 +59,8 @@ func usage() {
   spliti gen                            regenerate the editor target
   spliti edit                           open the project in the visual editor
   spliti run                            run the game
+  spliti check [flags]                  run headlessly, dump world state to JSON
+                                        flags: -ticks N -seed N -out world.json -png frame.png
   spliti build [--wasm]                 build the game`)
 }
 
@@ -88,6 +93,30 @@ func cmdEdit() error {
 		return err
 	}
 	return runDir(p.Root, nil, bin)
+}
+
+// cmdCheck generates and runs the headless verification target: it builds the
+// game's scene + systems with a deterministic clock and seeded RNG, runs them
+// for a fixed number of frames, and writes the world state as JSON. Flags
+// (-ticks/-seed/-out/-png) pass through to the generated binary. Like the
+// editor it builds to a stable path and execs it from the project root so
+// asset and output paths resolve relative to the project.
+func cmdCheck(args []string) error {
+	p, err := gen.Load(".")
+	if err != nil {
+		return err
+	}
+	if err := p.GenerateCheck(); err != nil {
+		return err
+	}
+	if err := runDir(p.CheckDir(), nil, "go", "mod", "tidy"); err != nil {
+		return fmt.Errorf("check: go mod tidy (.spliti/check): %w", err)
+	}
+	bin := filepath.Join(p.CheckDir(), "spliti-check")
+	if err := runDir(p.CheckDir(), []string{"CGO_ENABLED=1"}, "go", "build", "-o", bin, "."); err != nil {
+		return err
+	}
+	return runDir(p.Root, nil, bin, args...)
 }
 
 func cmdBuild(args []string) error {

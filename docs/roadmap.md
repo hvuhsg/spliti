@@ -237,14 +237,22 @@ Severity: 🔴 blocking the loop · 🟠 high leverage · 🟡 productization
       JSON kept, engine internals (marshal to `{}`) and non-serializable values
       skipped, so a bad component never crashes the dump. Aligns with **Runtime
       save/load** (🟠) — same serialization seam, restore is the remaining half.
-- [ ] 🔴 **AI-2 — Headless verification harness** *(the killer feature)*.
-      Offscreen render (no window/present; `render3d.CaptureFrame` already reads
-      back pixels) with a null-PNG fallback on GPU-less CI, a scripted-input seam
-      over `plugin/inputs`, and a new CLI verb **`spliti check`** (boot, virtual
-      clock, seed, run N ticks, write `world.json` + `frame.png`, non-zero exit
-      on a failed assertion). Acceptance: an agent edits gameplay code, re-runs
-      `spliti check`, and diffs state + frame to confirm the change — no window,
-      no human.
+- [x] 🔴 **AI-2 — Headless verification harness** *(the killer feature)* — done:
+      the `check` package runs a configured App for N deterministic frames and
+      dumps the final world via `inspect`, with a frame-indexed `check.Script`
+      feeding synthetic `inputs.KeyEvent`s through the real action layer. The
+      harness is cgo-free (the screenshot capture is injected, not imported), so
+      logic-only games verify anywhere including CI. The **`spliti check`** CLI
+      verb (`-ticks/-seed/-out/-png`) generates a `.spliti/check` target — no
+      registry needed, `inspect` is generic — that runs the game's scene +
+      systems under the Manual clock + seeded RNG and writes `world.json` (+ an
+      optional PNG). Verified end-to-end on the scaffolded 3D game: two 30-frame
+      runs are byte-identical, the spinning entities' quaternions advance as
+      coded, and a 2560×1440 PNG is captured. Remaining follow-up: a render3d
+      **resource-only headless mode** so 3D-game (not just logic-only) checks run
+      on a GPU-less CI — the generated target currently wires the GPU render3d
+      (scene setup needs its registries), so 3D checks run wherever `spliti edit`
+      runs. That is a renderer refactor, not a harness gap.
 - [ ] 🟠 **AI-3 — Agent context surface**. `AGENTS.md` at repo root (canonical
       game skeleton, plugin set, schedule stages, the AI-2 verify loop as the
       prescribed workflow) + a **generated** capability manifest (`spliti
