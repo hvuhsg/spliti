@@ -4,6 +4,7 @@
 //	spliti gen                            regenerate .spliti/editor from the game source
 //	spliti edit                           gen + run the visual editor (needs cgo)
 //	spliti run                            run the game natively
+//	spliti check [flags]                  run the game headlessly and dump world state
 //	spliti build [--wasm]                 build the game binary (or wasm bundle)
 //
 // new/gen/edit/run/build all operate on the project in the current directory
@@ -12,6 +13,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +21,11 @@ import (
 
 	"github.com/hvuhsg/spliti/editor/gen"
 )
+
+// childStdout is where subprocess stdout goes. It is os.Stdout for normal CLI
+// use, but the MCP server (cmdMCP) reroutes it to stderr: stdout there is the
+// JSON-RPC protocol channel and must carry nothing else.
+var childStdout io.Writer = os.Stdout
 
 func main() {
 	if len(os.Args) < 2 {
@@ -35,6 +42,12 @@ func main() {
 		err = cmdEdit()
 	case "run":
 		err = run("go", "run", ".")
+	case "check":
+		err = cmdCheck(os.Args[2:])
+	case "manifest":
+		err = cmdManifest()
+	case "mcp":
+		err = cmdMCP()
 	case "build":
 		err = cmdBuild(os.Args[2:])
 	case "help", "-h", "--help":
@@ -56,6 +69,10 @@ func usage() {
   spliti gen                            regenerate the editor target
   spliti edit                           open the project in the visual editor
   spliti run                            run the game
+  spliti check [flags]                  run headlessly, dump world state to JSON
+                                        flags: -ticks N -seed N -out world.json -png frame.png
+  spliti manifest                       print the project surface + engine quick-reference
+  spliti mcp                            run an MCP server (stdio) exposing the agent loop
   spliti build [--wasm]                 build the game`)
 }
 
@@ -90,6 +107,55 @@ func cmdEdit() error {
 	return runDir(p.Root, nil, bin)
 }
 
+// cmdCheck generates and runs the headless verification target: it builds the
+// game's scene + systems with a deterministic clock and seeded RNG, runs them
+// for a fixed number of frames, and writes the world state as JSON. Flags
+// (-ticks/-seed/-out/-png) pass through to the generated binary. Like the
+// editor it builds to a stable path and execs it from the project root so
+// asset and output paths resolve relative to the project.
+func cmdCheck(args []string) error { return checkProject(".", args) }
+
+// checkProject generates, builds, and runs the headless verification target for
+// the project under dir, forwarding args (flags) to the generated binary.
+func checkProject(dir string, args []string) error {
+	p, err := gen.Load(dir)
+	if err != nil {
+		return err
+	}
+	if err := p.GenerateCheck(); err != nil {
+		return err
+	}
+	if err := runDir(p.CheckDir(), nil, "go", "mod", "tidy"); err != nil {
+		return fmt.Errorf("check: go mod tidy (.spliti/check): %w", err)
+	}
+	bin := filepath.Join(p.CheckDir(), "spliti-check")
+	if err := runDir(p.CheckDir(), []string{"CGO_ENABLED=1"}, "go", "build", "-o", bin, "."); err != nil {
+		return err
+	}
+	return runDir(p.Root, nil, bin, args...)
+}
+
+// cmdManifest prints a Markdown summary of the project's scanned surface and an
+// engine quick-reference — for an agent to load into context. It is read-only:
+// no target is generated.
+func cmdManifest() error {
+	s, err := manifestText(".")
+	if err != nil {
+		return err
+	}
+	fmt.Print(s)
+	return nil
+}
+
+// manifestText returns the Markdown manifest for the project under dir.
+func manifestText(dir string) (string, error) {
+	p, err := gen.Load(dir)
+	if err != nil {
+		return "", err
+	}
+	return p.Manifest(), nil
+}
+
 func cmdBuild(args []string) error {
 	wasm := len(args) > 0 && args[0] == "--wasm"
 	if wasm {
@@ -107,7 +173,7 @@ func runEnv(env []string, name string, args ...string) error {
 func runDir(dir string, env []string, name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, childStdout, os.Stderr
 	cmd.Env = append(os.Environ(), env...)
 	return cmd.Run()
 }

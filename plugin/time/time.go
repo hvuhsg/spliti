@@ -53,7 +53,16 @@ type Plugin struct {
 	// the 64 Hz default.
 	FixedTimestep gotime.Duration
 	// TargetFrameRate caps the main loop. Zero disables pacing (uncapped).
+	// Ignored when Manual is set (a virtual clock paces nothing).
 	TargetFrameRate int
+	// Manual switches the clock from the wall clock to a deterministic virtual
+	// clock: every frame advances Delta by exactly one fixed timestep, so one
+	// frame is one FixedUpdate iteration regardless of how much real time
+	// passed, and frame pacing is disabled. Headless, reproducible runs (e.g.
+	// `spliti check`) set this so the same scripted inputs and RNG seed produce
+	// byte-identical state every run. Combine with plugin/rng for full
+	// determinism. Real-time games leave it false.
+	Manual bool
 }
 
 // Build implements app.Plugin.
@@ -70,12 +79,22 @@ func (p Plugin) Build(a *app.App) {
 	}
 	app.InsertResource(a, t)
 
-	a.AddSystems(schedule.First, app.System(func(*app.Ctx) {
-		n := gotime.Now()
-		t.delta = n.Sub(t.lastTick)
-		t.elapsed = n.Sub(t.started)
-		t.lastTick = n
-	}).Label("__spliti_time_tick"))
+	if p.Manual {
+		// Virtual clock: advance by exactly one fixed step per frame, so the
+		// FixedUpdate driver below runs precisely one iteration each frame and
+		// nothing depends on the wall clock.
+		a.AddSystems(schedule.First, app.System(func(*app.Ctx) {
+			t.delta = t.fixedTimestep
+			t.elapsed += t.delta
+		}).Label("__spliti_time_tick"))
+	} else {
+		a.AddSystems(schedule.First, app.System(func(*app.Ctx) {
+			n := gotime.Now()
+			t.delta = n.Sub(t.lastTick)
+			t.elapsed = n.Sub(t.started)
+			t.lastTick = n
+		}).Label("__spliti_time_tick"))
+	}
 
 	a.SetPreUpdateHook(func() {
 		t.fixedAccum += t.delta
@@ -91,7 +110,7 @@ func (p Plugin) Build(a *app.App) {
 		}
 	})
 
-	if p.TargetFrameRate > 0 {
+	if p.TargetFrameRate > 0 && !p.Manual {
 		targetDur := gotime.Second / gotime.Duration(p.TargetFrameRate)
 		a.SetPostUpdateHook(func() {
 			elapsed := gotime.Since(t.lastTick)

@@ -205,3 +205,72 @@ product decision (most of all the netcode model).
 3. ~~Asset pipeline: async loads + load-failure recovery~~ — done (AssetLoader)
 
 (For 2D games, sprite animation remains the top gap.)
+
+## AI track — making the engine an agent can build games with
+
+A **parallel workstream** (co-equal with the Bevy-shaped engine work above, not a
+replacement). The bet: spliti's feature surface is largely done — what's missing
+is the loop an AI agent needs to build games *unattended*: **write → run →
+observe → correct**. A human observes by looking at the screen; an agent needs
+the run to be deterministic, the world readable as data, and the frame
+capturable headless. Most of the parts already exist for the editor — these
+milestones promote them to first-class engine capabilities.
+
+Severity: 🔴 blocking the loop · 🟠 high leverage · 🟡 productization
+
+- [ ] 🔴 **AI-0 — Determinism contract** *(prerequisite, small)*. Injectable
+      **virtual clock** mode for `plugin/time` (fixed `dt`, advanced by tick
+      count, no `time.Now()`) plus a **seeded RNG resource**. The lockstep
+      netcode already proves the loop *can* be deterministic; this makes it
+      deterministic on demand. Acceptance: same game + seed + scripted inputs →
+      byte-identical world JSON after N ticks. Pairs with the wall-clock/NetClock
+      coupling item under Scalability.
+- [x] 🔴 **AI-1 — World-state-as-data** — done: public `inspect` package
+      (`inspect.World`/`WorldJSON`) dumps the live ECS world → JSON (entities,
+      components, resources). The B-spike resolved in favor of a **codegen-free,
+      registration-free** dump: it walks arche's public reflection surface
+      (`World.Ids` → `ecs.ComponentInfo` → `World.Get`), so every component on
+      every entity is captured by type with no per-game generation. **Entity-
+      reference serialization** (the 🟡 item above) fell out for free —
+      `ecs.Entity` fields marshal as arche's stable `[id, gen]` pairs (Parent
+      links and game refs alike). Resources are dumped best-effort: meaningful
+      JSON kept, engine internals (marshal to `{}`) and non-serializable values
+      skipped, so a bad component never crashes the dump. Aligns with **Runtime
+      save/load** (🟠) — same serialization seam, restore is the remaining half.
+- [x] 🔴 **AI-2 — Headless verification harness** *(the killer feature)* — done:
+      the `check` package runs a configured App for N deterministic frames and
+      dumps the final world via `inspect`, with a frame-indexed `check.Script`
+      feeding synthetic `inputs.KeyEvent`s through the real action layer. The
+      harness is cgo-free (the screenshot capture is injected, not imported), so
+      logic-only games verify anywhere including CI. The **`spliti check`** CLI
+      verb (`-ticks/-seed/-out/-png`) generates a `.spliti/check` target — no
+      registry needed, `inspect` is generic — that runs the game's scene +
+      systems under the Manual clock + seeded RNG and writes `world.json` (+ an
+      optional PNG). Verified end-to-end on the scaffolded 3D game: two 30-frame
+      runs are byte-identical, the spinning entities' quaternions advance as
+      coded, and a 2560×1440 PNG is captured. Remaining follow-up: a render3d
+      **resource-only headless mode** so 3D-game (not just logic-only) checks run
+      on a GPU-less CI — the generated target currently wires the GPU render3d
+      (scene setup needs its registries), so 3D checks run wherever `spliti edit`
+      runs. That is a renderer refactor, not a harness gap.
+- [x] 🟠 **AI-3 — Agent context surface** — done: `AGENTS.md` at repo root leads
+      with the verify loop (`spliti check` → read `world.json` → iterate), then
+      the project layout, ECS-in-one-screen, schedule stages, determinism rules,
+      plugin table, and gotchas. A generated **`spliti manifest`** prints the
+      project's *scanned* surface (scenes, components, prefabs, input table — so
+      it never drifts from source) plus the engine quick-reference, for an agent
+      to load before working on an unfamiliar game. Tested
+      (`gen.Project.Manifest`) and verified E2E on a scaffolded project.
+- [x] 🟡 **AI-4 — `spliti` MCP server** *(productization)* — done: `spliti mcp`
+      runs a dependency-free MCP stdio server (newline-delimited JSON-RPC 2.0)
+      exposing the agent loop as tools — `spliti_new` (scaffold), `spliti_manifest`
+      (read the surface), `spliti_check` (run headless, return `world.json`). The
+      classic stdio pitfall is handled: subprocess stdout is rerouted to stderr so
+      the JSON-RPC channel stays clean. Verified end-to-end with a scripted
+      initialize → tools/list → tools/call session (manifest and check). Future:
+      expose `gen`/`build`/`screenshot` and a structured assertion tool.
+
+Critical path is **AI-0 → AI-1 → AI-2** — that trio *is* the agent loop;
+AI-3/AI-4 are leverage on top. The expensive-looking milestones are mostly
+assembly of code already written for the editor (snapshot, registry, screenshot,
+the deterministic netcode loop).
