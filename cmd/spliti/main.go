@@ -13,6 +13,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,11 @@ import (
 
 	"github.com/hvuhsg/spliti/editor/gen"
 )
+
+// childStdout is where subprocess stdout goes. It is os.Stdout for normal CLI
+// use, but the MCP server (cmdMCP) reroutes it to stderr: stdout there is the
+// JSON-RPC protocol channel and must carry nothing else.
+var childStdout io.Writer = os.Stdout
 
 func main() {
 	if len(os.Args) < 2 {
@@ -40,6 +46,8 @@ func main() {
 		err = cmdCheck(os.Args[2:])
 	case "manifest":
 		err = cmdManifest()
+	case "mcp":
+		err = cmdMCP()
 	case "build":
 		err = cmdBuild(os.Args[2:])
 	case "help", "-h", "--help":
@@ -64,6 +72,7 @@ func usage() {
   spliti check [flags]                  run headlessly, dump world state to JSON
                                         flags: -ticks N -seed N -out world.json -png frame.png
   spliti manifest                       print the project surface + engine quick-reference
+  spliti mcp                            run an MCP server (stdio) exposing the agent loop
   spliti build [--wasm]                 build the game`)
 }
 
@@ -104,8 +113,12 @@ func cmdEdit() error {
 // (-ticks/-seed/-out/-png) pass through to the generated binary. Like the
 // editor it builds to a stable path and execs it from the project root so
 // asset and output paths resolve relative to the project.
-func cmdCheck(args []string) error {
-	p, err := gen.Load(".")
+func cmdCheck(args []string) error { return checkProject(".", args) }
+
+// checkProject generates, builds, and runs the headless verification target for
+// the project under dir, forwarding args (flags) to the generated binary.
+func checkProject(dir string, args []string) error {
+	p, err := gen.Load(dir)
 	if err != nil {
 		return err
 	}
@@ -126,12 +139,21 @@ func cmdCheck(args []string) error {
 // engine quick-reference — for an agent to load into context. It is read-only:
 // no target is generated.
 func cmdManifest() error {
-	p, err := gen.Load(".")
+	s, err := manifestText(".")
 	if err != nil {
 		return err
 	}
-	fmt.Print(p.Manifest())
+	fmt.Print(s)
 	return nil
+}
+
+// manifestText returns the Markdown manifest for the project under dir.
+func manifestText(dir string) (string, error) {
+	p, err := gen.Load(dir)
+	if err != nil {
+		return "", err
+	}
+	return p.Manifest(), nil
 }
 
 func cmdBuild(args []string) error {
@@ -151,7 +173,7 @@ func runEnv(env []string, name string, args ...string) error {
 func runDir(dir string, env []string, name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, childStdout, os.Stderr
 	cmd.Env = append(os.Environ(), env...)
 	return cmd.Run()
 }

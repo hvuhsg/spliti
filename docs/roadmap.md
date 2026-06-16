@@ -261,10 +261,14 @@ Severity: 🔴 blocking the loop · 🟠 high leverage · 🟡 productization
       it never drifts from source) plus the engine quick-reference, for an agent
       to load before working on an unfamiliar game. Tested
       (`gen.Project.Manifest`) and verified E2E on a scaffolded project.
-- [ ] 🟡 **AI-4 — `spliti` MCP server** *(productization)*. Wrap `new`/`gen`/
-      `run`/`build`/`check`/`inspect`/`screenshot` as MCP tools so any MCP-capable
-      agent drives the whole loop natively. Acceptance: from a fresh dir, an agent
-      builds and verifies a game using only the MCP tools.
+- [x] 🟡 **AI-4 — `spliti` MCP server** *(productization)* — done: `spliti mcp`
+      runs a dependency-free MCP stdio server (newline-delimited JSON-RPC 2.0)
+      exposing the agent loop as tools — `spliti_new` (scaffold), `spliti_manifest`
+      (read the surface), `spliti_check` (run headless, return `world.json`). The
+      classic stdio pitfall is handled: subprocess stdout is rerouted to stderr so
+      the JSON-RPC channel stays clean. Verified end-to-end with a scripted
+      initialize → tools/list → tools/call session (manifest and check). Future:
+      expose `gen`/`build`/`screenshot` and a structured assertion tool.
 
 Critical path is **AI-0 → AI-1 → AI-2** — that trio *is* the agent loop;
 AI-3/AI-4 are leverage on top. The expensive-looking milestones are mostly

@@ -67,7 +67,7 @@ func scaffold(dir, engine string) error {
 func runIn(dir, name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	cmd.Stdout, cmd.Stderr = childStdout, os.Stderr
 	return cmd.Run()
 }
 
