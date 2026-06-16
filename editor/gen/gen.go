@@ -188,6 +188,53 @@ func (p *Project) render(t *template.Template, path string) error {
 	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
 
+// Manifest renders a Markdown summary of the project's live surface (scanned,
+// so it never drifts from source) plus an engine quick-reference, for an agent
+// to load into context before working on the game. `spliti manifest` prints it.
+func (p *Project) Manifest() string {
+	var b strings.Builder
+	w := func(format string, a ...any) { fmt.Fprintf(&b, format, a...) }
+
+	w("# %s — spliti project manifest\n\n", p.Config.Name)
+	w("Module `%s`. Scanned from source — regenerate any time with `spliti manifest`.\n\n", p.Module)
+
+	w("## Verify your changes\n\n")
+	w("```\nspliti check -ticks 120 -out world.json   # deterministic headless run → state JSON\nspliti check -ticks 120 -png frame.png    # also capture a frame (needs a GPU)\n```\n")
+	w("Same code + seed → byte-identical `world.json`. Diff it across edits. See AGENTS.md.\n\n")
+
+	w("## Scenes\n\n")
+	w("Scene file: `%s`. Default scene: `%s`.\n", p.Config.Scene.File, p.Config.Scene.Default)
+	w("Scenes (`//spliti:scene`): %s\n\n", join(p.Scenes))
+
+	w("## Components (`game/components`)\n\n")
+	w("%s\n\n", join(p.Components))
+
+	w("## Prefabs (`//spliti:entity` in `game/entities`)\n\n")
+	w("%s\n\n", join(p.Prefabs))
+
+	w("## Input\n\n")
+	if p.InputFunc != "" {
+		w("Action table built by `game.%s` (`//spliti:input`). Read in systems via `actions.Get(c)`.\n\n", p.InputFunc)
+	} else {
+		w("No `//spliti:input` action table found.\n\n")
+	}
+
+	w("## Engine quick-reference\n\n")
+	w("Startup stages (once): PreStartup → Startup → PostStartup.\n")
+	w("Frame stages: First → PreUpdate → StateTransition → Update → PostUpdate → Last.\n")
+	w("Fixed loop (0+/frame): FixedFirst → FixedUpdate → FixedLast — put deterministic gameplay here.\n\n")
+	w("Key APIs: `app.Query1..6`, `app.GetResource[T]`/`InsertResource`, `app.SendEvent`/`ReadEvents`, `scene.Spawn/Set`, `app.GetResource[rng.Rand]` for randomness.\n")
+
+	return b.String()
+}
+
+func join(s []string) string {
+	if len(s) == 0 {
+		return "_(none)_"
+	}
+	return "`" + strings.Join(s, "`, `") + "`"
+}
+
 // DefaultSceneFunc returns the func name of the default scene (scene names and
 // func names coincide unless the directive renames; M1 templates keep them
 // equal, so the name is used directly).

@@ -38,6 +38,8 @@ func main() {
 		err = run("go", "run", ".")
 	case "check":
 		err = cmdCheck(os.Args[2:])
+	case "manifest":
+		err = cmdManifest()
 	case "build":
 		err = cmdBuild(os.Args[2:])
 	case "help", "-h", "--help":
@@ -61,6 +63,7 @@ func usage() {
   spliti run                            run the game
   spliti check [flags]                  run headlessly, dump world state to JSON
                                         flags: -ticks N -seed N -out world.json -png frame.png
+  spliti manifest                       print the project surface + engine quick-reference
   spliti build [--wasm]                 build the game`)
 }
 
@@ -117,6 +120,18 @@ func cmdCheck(args []string) error {
 		return err
 	}
 	return runDir(p.Root, nil, bin, args...)
+}
+
+// cmdManifest prints a Markdown summary of the project's scanned surface and an
+// engine quick-reference — for an agent to load into context. It is read-only:
+// no target is generated.
+func cmdManifest() error {
+	p, err := gen.Load(".")
+	if err != nil {
+		return err
+	}
+	fmt.Print(p.Manifest())
+	return nil
 }
 
 func cmdBuild(args []string) error {

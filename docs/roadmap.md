@@ -253,13 +253,14 @@ Severity: 🔴 blocking the loop · 🟠 high leverage · 🟡 productization
       on a GPU-less CI — the generated target currently wires the GPU render3d
       (scene setup needs its registries), so 3D checks run wherever `spliti edit`
       runs. That is a renderer refactor, not a harness gap.
-- [ ] 🟠 **AI-3 — Agent context surface**. `AGENTS.md` at repo root (canonical
-      game skeleton, plugin set, schedule stages, the AI-2 verify loop as the
-      prescribed workflow) + a **generated** capability manifest (`spliti
-      manifest`: plugins, component catalog from the registry, stages, CLI verbs)
-      so it never drifts. Curate examples as few-shot templates. Acceptance: an
-      agent given only `AGENTS.md` + the manifest + AI-2 can scaffold, build, and
-      verify a small game without reading the whole tree.
+- [x] 🟠 **AI-3 — Agent context surface** — done: `AGENTS.md` at repo root leads
+      with the verify loop (`spliti check` → read `world.json` → iterate), then
+      the project layout, ECS-in-one-screen, schedule stages, determinism rules,
+      plugin table, and gotchas. A generated **`spliti manifest`** prints the
+      project's *scanned* surface (scenes, components, prefabs, input table — so
+      it never drifts from source) plus the engine quick-reference, for an agent
+      to load before working on an unfamiliar game. Tested
+      (`gen.Project.Manifest`) and verified E2E on a scaffolded project.
 - [ ] 🟡 **AI-4 — `spliti` MCP server** *(productization)*. Wrap `new`/`gen`/
       `run`/`build`/`check`/`inspect`/`screenshot` as MCP tools so any MCP-capable
       agent drives the whole loop natively. Acceptance: from a fresh dir, an agent

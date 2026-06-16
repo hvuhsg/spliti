@@ -129,6 +129,62 @@ func TestLoadAndGenerate(t *testing.T) {
 	mustContain("main.go", "Prefabs:     buildPrefabs()")
 }
 
+func TestGenerateCheckTarget(t *testing.T) {
+	dir := scaffoldFixture(t)
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.GenerateCheck(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(p.CheckDir(), "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		`splititime.Plugin{Manual: true}`,
+		`rng.Plugin{Seed: *seed}`,
+		`scenes.Main`,
+		`check.Run(a, check.Options{`,
+		`Capture:        screenshot.Save`,
+		"//go:build !js",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("check main.go missing %q", want)
+		}
+	}
+	gomod, err := os.ReadFile(filepath.Join(p.CheckDir(), "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(gomod), "spliti-check-target") || !strings.Contains(string(gomod), "replace demo => ../..") {
+		t.Errorf("check go.mod wrong:\n%s", gomod)
+	}
+}
+
+func TestManifest(t *testing.T) {
+	dir := scaffoldFixture(t)
+	p, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := p.Manifest()
+	for _, want := range []string{
+		"# demo — spliti project manifest",
+		"spliti check -ticks",
+		"`Health`, `Spinner`",
+		"`SpawnCrate`",
+		"Default scene: `Main`",
+		"FixedUpdate",
+	} {
+		if !strings.Contains(m, want) {
+			t.Errorf("manifest missing %q\n---\n%s", want, m)
+		}
+	}
+}
+
 func TestLoadRejectsScenelessProject(t *testing.T) {
 	dir := scaffoldFixture(t)
 	writeFile(t, filepath.Join(dir, "game/scenes/main.go"), "package scenes\n")
