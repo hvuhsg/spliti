@@ -225,13 +225,18 @@ Severity: 🔴 blocking the loop · 🟠 high leverage · 🟡 productization
       deterministic on demand. Acceptance: same game + seed + scripted inputs →
       byte-identical world JSON after N ticks. Pairs with the wall-clock/NetClock
       coupling item under Scalability.
-- [ ] 🔴 **AI-1 — World-state-as-data**. Public `inspect` package: dump the ECS
-      world → JSON (entities, components, resources) by generalizing
-      `editor/snapshot.go` + the `editor/registry` reflection so component
-      coverage is automatic. Pull in **Entity-reference serialization** (🟡
-      above) and align with **Runtime save/load** (🟠 above) — same serialization
-      problem. Acceptance: round-trips every component the editor inspector
-      handles; assert on a running game's state in a test.
+- [x] 🔴 **AI-1 — World-state-as-data** — done: public `inspect` package
+      (`inspect.World`/`WorldJSON`) dumps the live ECS world → JSON (entities,
+      components, resources). The B-spike resolved in favor of a **codegen-free,
+      registration-free** dump: it walks arche's public reflection surface
+      (`World.Ids` → `ecs.ComponentInfo` → `World.Get`), so every component on
+      every entity is captured by type with no per-game generation. **Entity-
+      reference serialization** (the 🟡 item above) fell out for free —
+      `ecs.Entity` fields marshal as arche's stable `[id, gen]` pairs (Parent
+      links and game refs alike). Resources are dumped best-effort: meaningful
+      JSON kept, engine internals (marshal to `{}`) and non-serializable values
+      skipped, so a bad component never crashes the dump. Aligns with **Runtime
+      save/load** (🟠) — same serialization seam, restore is the remaining half.
 - [ ] 🔴 **AI-2 — Headless verification harness** *(the killer feature)*.
       Offscreen render (no window/present; `render3d.CaptureFrame` already reads
       back pixels) with a null-PNG fallback on GPU-less CI, a scripted-input seam

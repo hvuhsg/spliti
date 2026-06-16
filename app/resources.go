@@ -22,6 +22,18 @@ func HasResource[T any](a *App) bool {
 	return ok
 }
 
+// Resources returns a snapshot of every installed resource keyed by its type,
+// for inspection and debugging (see package inspect). The map is a fresh copy;
+// the values alias the live resources. Prefer GetResource in normal code — this
+// exists so tooling can enumerate resources without knowing their types.
+func (a *App) Resources() map[reflect.Type]any {
+	out := make(map[reflect.Type]any, len(a.resources))
+	for k, v := range a.resources {
+		out[k] = v
+	}
+	return out
+}
+
 func typeKey[T any]() reflect.Type {
 	return reflect.TypeOf((*T)(nil)).Elem()
 }
