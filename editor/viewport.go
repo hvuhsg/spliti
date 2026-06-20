@@ -6,6 +6,7 @@ import (
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/editor/gizmo"
+	"github.com/hvuhsg/spliti/editor/srcmodel"
 	"github.com/hvuhsg/spliti/plugin/inputs"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
@@ -58,13 +59,21 @@ func drawViewport(c *app.Ctx, st *state) {
 	imgui.Image(*imgui.NewTextureRefTextureID(st.texID), avail)
 	st.vpHovered = imgui.IsItemHovered()
 
-	// Prefab drop from the Assets panel: spawn where the drop ray lands.
+	// Drop from the Assets panel: spawn where the drop ray lands. A prefab spawns
+	// its //spliti:entity; a model asset spawns via the built-in mesh prefab.
 	if imgui.BeginDragDropTarget() {
-		if payloadDelivered(imgui.AcceptDragDropPayload(prefabDragType)) && st.dragPrefab != "" {
-			mp := imgui.MousePos()
+		mp := imgui.MousePos()
+		ray := func() m.Vec3 {
 			origin, dir := cam.ScreenToRay(float64(mp.X-imageMin.X), float64(mp.Y-imageMin.Y), w, h)
-			st.spawnPrefab(c, st.dragPrefab, dropPoint(c, origin, dir))
+			return dropPoint(c, origin, dir)
+		}
+		if payloadDelivered(imgui.AcceptDragDropPayload(prefabDragType)) && st.dragPrefab != "" {
+			st.spawnPrefab(c, st.dragPrefab, ray())
 			st.dragPrefab = ""
+		}
+		if payloadDelivered(imgui.AcceptDragDropPayload(assetDragType)) && st.dragAsset.kind == srcmodel.AssetMesh {
+			st.spawnMeshAsset(c, st.dragAsset.key, ray())
+			st.dragAsset = draggedAsset{}
 		}
 		imgui.EndDragDropTarget()
 	}
@@ -267,7 +276,20 @@ func (st *state) spawnPrefab(c *app.Ctx, prefab string, at m.Vec3) {
 // spawnPrefabT spawns a prefab instance at an explicit transform, naming it from
 // the prefab label, selecting it, and returning the live entity.
 func (st *state) spawnPrefabT(c *app.Ctx, prefab string, t render3d.Transform3D) (ecs.Entity, bool) {
-	base := prefabLabel(prefab)
+	return st.spawnNamed(c, prefabLabel(prefab), prefab, nil, t)
+}
+
+// spawnMeshAsset spawns a raw mesh (a model dragged from the Assets panel) via
+// the built-in mesh prefab, naming the instance after the mesh key.
+func (st *state) spawnMeshAsset(c *app.Ctx, meshKey string, at m.Vec3) (ecs.Entity, bool) {
+	t := render3d.XForm().At(at.X, at.Y, at.Z)
+	return st.spawnNamed(c, meshKey, meshPrefab, []string{meshKey, ""}, t)
+}
+
+// spawnNamed pushes a spawn command with a base instance name (deduplicated),
+// selecting the result. extra carries trailing prefab args (mesh/material keys
+// for meshPrefab; nil for ordinary prefabs).
+func (st *state) spawnNamed(c *app.Ctx, base, prefab string, extra []string, t render3d.Transform3D) (ecs.Entity, bool) {
 	if base == "" {
 		base = "instance"
 	}
@@ -278,7 +300,7 @@ func (st *state) spawnPrefabT(c *app.Ctx, prefab string, t render3d.Transform3D)
 	} else if sc := st.scene(); sc != nil && sc.Spawn(name) != nil {
 		name = st.freeInstanceName(c, base)
 	}
-	st.push(c, &cmdSpawn{instance: name, prefab: prefab, t: t})
+	st.push(c, &cmdSpawn{instance: name, prefab: prefab, extra: extra, t: t})
 	e, ok := entityByInstance(c, name)
 	if ok {
 		st.selectOne(e)

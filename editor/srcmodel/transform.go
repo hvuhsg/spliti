@@ -166,6 +166,14 @@ func (s *Scene) SetTransform(instance string, t Transform) error {
 // prefab is written verbatim (e.g. "entities.SpawnCrate"); instance must not
 // already exist in the scene.
 func (s *Scene) AddSpawn(instance, prefab string, t Transform) (*Spawn, error) {
+	return s.AddSpawnArgs(instance, prefab, t)
+}
+
+// AddSpawnArgs is AddSpawn with extra trailing string-literal arguments appended
+// after the transform, for the built-in mesh spawn:
+//
+//	_ = scene.Spawn(c, "instance", render3d.NewMesh(c, <chain>, "mesh", "material"))
+func (s *Scene) AddSpawnArgs(instance, prefab string, t Transform, extra ...string) (*Spawn, error) {
 	if s.Spawn(instance) != nil {
 		return nil, fmt.Errorf("srcmodel: scene %q already has instance %q", s.Name, instance)
 	}
@@ -176,9 +184,13 @@ func (s *Scene) AddSpawn(instance, prefab string, t Transform) (*Spawn, error) {
 	if prefabFun == nil {
 		return nil, fmt.Errorf("srcmodel: invalid prefab name %q", prefab)
 	}
+	args := []dst.Expr{dst.NewIdent(s.ctx), chainExpr(t)}
+	for _, x := range extra {
+		args = append(args, &dst.BasicLit{Kind: token.STRING, Value: strconv.Quote(x)})
+	}
 	prefabCall := &dst.CallExpr{
 		Fun:  prefabFun,
-		Args: []dst.Expr{dst.NewIdent(s.ctx), chainExpr(t)},
+		Args: args,
 	}
 	spawnCall := &dst.CallExpr{
 		Fun: &dst.SelectorExpr{X: dst.NewIdent(scenePkg), Sel: dst.NewIdent("Spawn")},

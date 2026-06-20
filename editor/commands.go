@@ -346,10 +346,13 @@ func (cmd *cmdRemoveComponent) Undo(c *app.Ctx) error {
 
 // --- spawn / delete ----------------------------------------------------------
 
-// cmdSpawn adds a new instance: a live prefab call plus a scene.Spawn line.
+// cmdSpawn adds a new instance: a live prefab call plus a scene.Spawn line. For
+// a raw-mesh spawn (drag a model from the Assets panel) prefab is meshPrefab and
+// extra carries the mesh and material keys.
 type cmdSpawn struct {
 	instance string
 	prefab   string
+	extra    []string
 	t        render3d.Transform3D
 }
 
@@ -360,11 +363,11 @@ func (cmd *cmdSpawn) Do(c *app.Ctx) error {
 	if _, exists := entityByInstance(c, cmd.instance); exists {
 		return fmt.Errorf("instance %q already exists", cmd.instance)
 	}
-	if _, err := spawnLive(c, st, cmd.instance, cmd.prefab, cmd.t); err != nil {
+	if _, err := spawnLive(c, st, cmd.instance, cmd.prefab, cmd.t, cmd.extra...); err != nil {
 		return err
 	}
 	if sc := st.scene(); sc != nil {
-		if _, err := sc.AddSpawn(cmd.instance, cmd.prefab, srcmodel.FromTransform3D(cmd.t)); err != nil {
+		if _, err := sc.AddSpawnArgs(cmd.instance, cmd.prefab, srcmodel.FromTransform3D(cmd.t), cmd.extra...); err != nil {
 			st.status(fmt.Sprintf("live-only: %v", err))
 		}
 	}
@@ -560,7 +563,7 @@ func (cmd *cmdDuplicate) Do(c *app.Ctx) error {
 		return fmt.Errorf("instance %q has a non-literal transform", cmd.src)
 	}
 	t := *src.Transform
-	if _, err := sc.AddSpawn(cmd.instance, src.Prefab, t); err != nil {
+	if _, err := sc.AddSpawnArgs(cmd.instance, src.Prefab, t, src.Args...); err != nil {
 		return err
 	}
 	for _, sl := range src.Sets {
@@ -592,18 +595,157 @@ func (cmd *cmdDuplicate) Undo(c *app.Ctx) error {
 	return nil
 }
 
+// --- asset import / material -------------------------------------------------
+
+// cmdImportMesh registers an imported OBJ: it loads the mesh live and appends a
+// meshes.LoadOBJFile line to LoadAssets. Undo removes the source line (the live
+// GPU mesh stays — the registry has no unload — but it is harmless and gone on
+// the next run).
+type cmdImportMesh struct {
+	key, file, abs string
+}
+
+func (cmd *cmdImportMesh) Name() string { return "import " + cmd.key }
+
+func (cmd *cmdImportMesh) Do(c *app.Ctx) error {
+	st := app.GetResource[state](c)
+	if r := app.GetResource[render3d.MeshRegistry](c); r != nil {
+		if err := r.LoadOBJFile(cmd.key, cmd.abs); err != nil {
+			return err
+		}
+	}
+	st.invalidateThumb(c, cmd.key) // rebuild the grid thumbnail for a re-imported key
+	if st.assets != nil {
+		if err := st.assets.AddMesh(cmd.key, cmd.file); err != nil {
+			st.status(fmt.Sprintf("live-only: %v", err))
+		} else {
+			st.saveAssetsModel()
+		}
+	} else {
+		st.status("imported live-only (no //spliti:assets function found)")
+	}
+	return nil
+}
+
+func (cmd *cmdImportMesh) Undo(c *app.Ctx) error {
+	st := app.GetResource[state](c)
+	if st.assets != nil {
+		if err := st.assets.Remove(cmd.key); err == nil {
+			st.saveAssetsModel()
+		}
+	}
+	return nil
+}
+
+// cmdNewMaterial registers a new material live and in LoadAssets.
+type cmdNewMaterial struct {
+	key  string
+	spec srcmodel.MaterialSpec
+}
+
+func (cmd *cmdNewMaterial) Name() string { return "new material " + cmd.key }
+
+func (cmd *cmdNewMaterial) Do(c *app.Ctx) error {
+	st := app.GetResource[state](c)
+	if r := app.GetResource[render3d.MaterialRegistry](c); r != nil {
+		if err := r.Load(cmd.key, matFromSpec(cmd.spec)); err != nil {
+			return err
+		}
+	}
+	if st.assets != nil {
+		if err := st.assets.AddMaterial(cmd.key, cmd.spec); err != nil {
+			st.status(fmt.Sprintf("live-only: %v", err))
+		} else {
+			st.saveAssetsModel()
+		}
+	}
+	return nil
+}
+
+func (cmd *cmdNewMaterial) Undo(c *app.Ctx) error {
+	st := app.GetResource[state](c)
+	if st.assets != nil {
+		if err := st.assets.Remove(cmd.key); err == nil {
+			st.saveAssetsModel()
+		}
+	}
+	return nil
+}
+
+// cmdSetMaterial edits an existing material's properties live and in source.
+type cmdSetMaterial struct {
+	key           string
+	before, after srcmodel.MaterialSpec
+}
+
+func (cmd *cmdSetMaterial) Name() string { return "edit material " + cmd.key }
+
+func (cmd *cmdSetMaterial) Do(c *app.Ctx) error   { return cmd.apply(c, cmd.after) }
+func (cmd *cmdSetMaterial) Undo(c *app.Ctx) error { return cmd.apply(c, cmd.before) }
+
+func (cmd *cmdSetMaterial) apply(c *app.Ctx, spec srcmodel.MaterialSpec) error {
+	st := app.GetResource[state](c)
+	if r := app.GetResource[render3d.MaterialRegistry](c); r != nil {
+		if err := r.Load(cmd.key, matFromSpec(spec)); err != nil {
+			return err
+		}
+	}
+	if st.assets != nil {
+		if err := st.assets.SetMaterial(cmd.key, spec); err != nil {
+			st.status(fmt.Sprintf("live-only: %v", err))
+		} else {
+			st.saveAssetsModel()
+		}
+	}
+	return nil
+}
+
+// matFromSpec builds a render3d.Material from the editor's editable subset.
+func matFromSpec(s srcmodel.MaterialSpec) render3d.Material {
+	return render3d.Material{
+		BaseColor:   render3d.Color{R: s.R, G: s.G, B: s.B, A: s.A},
+		Metallic:    s.Metallic,
+		Roughness:   s.Roughness,
+		DoubleSided: s.DoubleSided,
+	}
+}
+
 // --- live-world helpers --------------------------------------------------------
 
+// meshPrefab is the written form of the built-in raw-mesh spawn. It is not a
+// //spliti:entity; spawnLive calls render3d.NewMesh directly, and the scene line
+// is render3d.NewMesh(c, <chain>, "mesh", "material") (the scene file already
+// imports render3d for XForm, so it compiles).
+const meshPrefab = "render3d.NewMesh"
+
 // spawnLive runs the prefab function and tags the result, mirroring what the
-// scene line will do on the next load.
-func spawnLive(c *app.Ctx, st *state, instance, prefab string, t render3d.Transform3D) (ecs.Entity, error) {
-	fn := st.cfg.Prefabs[prefab]
-	if fn == nil {
-		return ecs.Entity{}, fmt.Errorf("unknown prefab %s (regenerate with spliti gen)", prefab)
+// scene line will do on the next load. For meshPrefab it builds the entity from
+// render3d.NewMesh with the mesh/material keys carried in extra.
+func spawnLive(c *app.Ctx, st *state, instance, prefab string, t render3d.Transform3D, extra ...string) (ecs.Entity, error) {
+	var e ecs.Entity
+	if prefab == meshPrefab {
+		mesh := argAt(extra, 0)
+		if mesh == "" {
+			return ecs.Entity{}, fmt.Errorf("mesh spawn missing mesh ref")
+		}
+		e = render3d.NewMesh(c, t, mesh, argAt(extra, 1))
+	} else {
+		fn := st.cfg.Prefabs[prefab]
+		if fn == nil {
+			return ecs.Entity{}, fmt.Errorf("unknown prefab %s (regenerate with spliti gen)", prefab)
+		}
+		e = fn(c, t)
 	}
-	e := fn(c, t)
 	scene.Spawn(c, instance, e)
 	return e, nil
+}
+
+// argAt returns a[i] or "" when out of range.
+func argAt(a []string, i int) string {
+	if i >= 0 && i < len(a) {
+		return a[i]
+	}
+	return ""
 }
 
 // nameIndex maps an instance name to its live entity. It accelerates batch
@@ -668,7 +810,7 @@ func syncInstanceFromModelInto(c *app.Ctx, st *state, sp *srcmodel.Spawn, idx na
 		} else {
 			t = render3d.XForm()
 		}
-		e, err = spawnLive(c, st, sp.Instance, sp.Prefab, t)
+		e, err = spawnLive(c, st, sp.Instance, sp.Prefab, t, sp.Args...)
 		if err != nil {
 			return err
 		}

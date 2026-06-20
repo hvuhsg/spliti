@@ -9,6 +9,7 @@ import (
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/hvuhsg/spliti/app"
 	"github.com/hvuhsg/spliti/editor/registry"
+	"github.com/hvuhsg/spliti/editor/srcmodel"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	"github.com/hvuhsg/spliti/scene"
@@ -100,8 +101,8 @@ func drawComponent(c *app.Ctx, st *state, e ecs.Entity, inst string, ti *registr
 		return
 	}
 	for _, f := range ti.Fields {
-		if keys, ok := assetRefKeys(c, ti.Name, f.Name); ok {
-			drawAssetRefField(fc, f.Name, f.Value(comp), keys)
+		if keys, kind, ok := assetRefKeys(c, ti.Name, f.Name); ok {
+			drawAssetRefField(fc, f.Name, f.Value(comp), keys, kind)
 			continue
 		}
 		drawField(fc, f.Name, f.Kind, f.Value(comp))
@@ -109,33 +110,56 @@ func drawComponent(c *app.Ctx, st *state, e ecs.Entity, inst string, ti *registr
 }
 
 // assetRefKeys reports whether a component field holds a registered-asset key
-// (and returns the known keys for its dropdown). These are the string fields
-// that reference assets by ref, so the inspector can offer a pick list rather
-// than a free-text box that silently accepts unknown names.
-func assetRefKeys(c *app.Ctx, comp, field string) ([]string, bool) {
+// (and returns the known keys for its dropdown plus the asset kind it accepts
+// from a drag-drop). These are the string fields that reference assets by ref,
+// so the inspector can offer a pick list rather than a free-text box that
+// silently accepts unknown names, and accept an asset dragged from the panel.
+func assetRefKeys(c *app.Ctx, comp, field string) ([]string, srcmodel.AssetKind, bool) {
 	switch {
 	case comp == "MeshRenderer" && field == "Mesh":
 		if r := app.GetResource[render3d.MeshRegistry](c); r != nil {
-			return r.Keys(), true
+			return visibleKeys(r.Keys()), srcmodel.AssetMesh, true
 		}
 	case comp == "MaterialRef" && field == "Material":
 		if r := app.GetResource[render3d.MaterialRegistry](c); r != nil {
-			return r.Keys(), true
+			return visibleKeys(r.Keys()), srcmodel.AssetMaterial, true
 		}
 	}
-	return nil, false
+	return nil, "", false
+}
+
+// visibleKeys drops editor-internal (reserved) registry refs from a key list.
+func visibleKeys(keys []string) []string {
+	out := keys[:0:0]
+	for _, k := range keys {
+		if !strings.HasPrefix(k, reservedAssetPrefix) {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // drawAssetRefField edits a string asset key as a combo of registered keys.
 // "(none)" clears the ref (the registry falls back to its default); an
 // unregistered current value stays visible and selected rather than vanishing.
-func drawAssetRefField(fc fieldCtx, name string, v reflect.Value, keys []string) {
+// The combo is also a drop target for an asset of the matching kind dragged
+// from the Assets panel.
+func drawAssetRefField(fc fieldCtx, name string, v reflect.Value, keys []string, accept srcmodel.AssetKind) {
 	cur := v.String()
 	label := cur
 	if label == "" {
 		label = "(none)"
 	}
-	if !imgui.BeginCombo(name, label) {
+	opened := imgui.BeginCombo(name, label)
+	if imgui.BeginDragDropTarget() {
+		if payloadDelivered(imgui.AcceptDragDropPayload(assetDragType)) && fc.st.dragAsset.kind == accept {
+			v.SetString(fc.st.dragAsset.key)
+			fc.commitNow()
+			fc.st.dragAsset = draggedAsset{}
+		}
+		imgui.EndDragDropTarget()
+	}
+	if !opened {
 		return
 	}
 	defer imgui.EndCombo()

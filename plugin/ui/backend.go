@@ -29,6 +29,10 @@ type texEntry struct {
 	view *wgpu.TextureView
 	bg   *wgpu.BindGroup
 	w, h int32
+	// userOwned marks a texture created via NewImageTexture: it owns its tex/view
+	// like the font atlas, but unlike the atlas it is freed by UnregisterTexture
+	// rather than ImGui's texture lifecycle.
+	userOwned bool
 }
 
 func (t *texEntry) release() {
