@@ -15,7 +15,11 @@ from Kenney's [hexagon kit](https://kenney.nl/assets/hexagon-kit) (CC0).
 - The first tile can go anywhere; after that the island must grow outward, so
   you can only build next to tiles already placed.
 - What you get is random among whatever the rules allow, so a grass cell might
-  come up as plain grass, a forest, or a hill — and an island never repeats.
+  come up as plain grass, a forest, a hill — or, once in a while, a settlement:
+  a cabin, farm, market, windmill, castle, wizard tower and more. Beaches can
+  turn up a dock or port. Bare land is common and the structures are rare, so
+  every island grows wild with the odd village dotted across it — and an island
+  never repeats.
 
 **See [`rules/RULES.md`](rules/RULES.md) for the full illustrated rules** — every
 tile, what may sit next to it, and the allowed/forbidden combinations.

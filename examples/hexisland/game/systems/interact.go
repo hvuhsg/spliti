@@ -40,13 +40,14 @@ func Interact(c *app.Ctx) {
 	}
 
 	// Place: on the click's leading edge, collapse the hovered cell and spawn
-	// whatever tile the rules chose, at a random 60° rotation for variety.
+	// whatever tile the rules chose. Most tiles get a random 60° spin for variety;
+	// a directional tile (a dock/port) is turned so its green half faces grass.
 	click := render3d.MouseButtonDown(c, inputs.MouseButtonLeft)
 	if click && !g.prevClick && g.HasHover {
 		if tile, ok := g.Board.Collapse(g.Hover, g.Rng); ok {
 			if model := g.Models[tile.Model]; model != nil {
 				x, z := g.Board.WorldXZ(g.Hover)
-				rotDeg := float32(60 * g.Rng.Intn(6))
+				rotDeg := float32(60 * g.Board.RotationStep(g.Hover, tile, g.Rng))
 				render3d.SpawnModel(c.Commands(), model,
 					render3d.XForm().At(x, 0, z).EulerDeg(0, rotDeg, 0))
 			}

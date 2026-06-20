@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"strconv"
 
@@ -132,10 +133,24 @@ var exampleScenes = map[string][]placement{
 		{"dirt", 1, 0}, {"stone-hill", 1, -1}, {"stone-mountain", 0, -1},
 		{"stone-rocks", -1, 0}, {"dirt-lumber", -1, 1}, {"stone", 0, 1}},
 
+	// A harbour on the shore, oriented the way the rules place it: its green half
+	// (which at rotation 0 faces +X, the {1,0} edge) backs onto grass, and its
+	// water half faces the open sea on the far side.
+	"harbour": {{"building-port", 0, 0},
+		{"grass", 1, 0}, {"grass-forest", 1, -1}, {"sand", 0, 1}, // land behind the green half
+		{"water", 0, -1}, {"water", -1, 0}, {"water-rocks", -1, 1}}, // sea before the water half
+
+	// Two buildings kept apart by the spacing rule: a castle and a mill on
+	// separate grass cells with plain ground between them.
+	"settlements": {{"building-castle", -1, 0}, {"grass", 0, 0}, {"building-mill", 1, 0},
+		{"grass-forest", 0, -1}, {"grass-hill", 0, 1}},
+
 	// Forbidden adjacencies, force-placed for contrast (the rules would reject
 	// these — they exist only so the docs can show what NOT to allow).
-	"forbidden-mountain-sea": {{"water", 0, 0}, {"stone-mountain", 1, 0}},
-	"forbidden-island-beach": {{"water-island", 0, 0}, {"sand", 1, 0}},
+	"forbidden-mountain-sea":       {{"water", 0, 0}, {"stone-mountain", 1, 0}},
+	"forbidden-island-beach":       {{"water-island", 0, 0}, {"sand", 1, 0}},
+	"forbidden-harbour-inland":     {{"building-dock", 0, 0}, {"sand", 1, 0}, {"grass", 1, -1}, {"sand", 0, -1}, {"sand-rocks", -1, 0}, {"grass", -1, 1}, {"sand-desert", 0, 1}},
+	"forbidden-buildings-adjacent": {{"building-house", 0, 0}, {"building-market", 1, 0}},
 }
 
 // setupTile renders a single tile at the origin, framed close.
@@ -149,6 +164,13 @@ func setupTile(c *app.Ctx, st *hexCap, name string) {
 	st.poseCam = true
 	st.target = m.Vec3{Y: 0.12}
 	st.dist, st.yaw, st.pitch = 2.6, 0.7, 0.82
+	// SPLITI_HEX_TOPDOWN frames the tile from straight overhead (world +X to the
+	// right, +Z down), used to read a tile's edge layout — e.g. which hex edge a
+	// dock's grassy half faces.
+	if os.Getenv("SPLITI_HEX_TOPDOWN") != "" {
+		st.target = m.Vec3{}
+		st.dist, st.yaw, st.pitch = 2.4, 0, 1.5605
+	}
 }
 
 // setupScene renders one of the named example layouts and frames it.
@@ -192,7 +214,13 @@ func spawnTile(c *app.Ctx, g *systems.Game, p placement) {
 		return
 	}
 	x, z := g.Board.WorldXZ(wfc.Coord{Q: p.q, R: p.r})
-	render3d.SpawnModel(c.Commands(), model, render3d.XForm().At(x, 0, z))
+	var rotDeg float32
+	if s := os.Getenv("SPLITI_HEX_TILE_ROT"); s != "" {
+		if k, err := strconv.Atoi(s); err == nil {
+			rotDeg = float32(60 * k)
+		}
+	}
+	render3d.SpawnModel(c.Commands(), model, render3d.XForm().At(x, 0, z).EulerDeg(0, rotDeg, 0))
 }
 
 // hideAllMarkers marks every board cell collapsed so UpdateMarkers hides all the
@@ -243,6 +271,14 @@ func growIsland(c *app.Ctx, n int) {
 	if g == nil {
 		return
 	}
+	// SPLITI_HEX_SEED reseeds the board RNG so a screenshot is reproducible (and
+	// a batch run gets a distinct island per seed). Without it the game's normal
+	// time-based seed gives a fresh island each launch.
+	if s := os.Getenv("SPLITI_HEX_SEED"); s != "" {
+		if seed, err := strconv.ParseInt(s, 10, 64); err == nil {
+			g.Rng = rand.New(rand.NewSource(seed))
+		}
+	}
 	placed := 0
 	for placed < n {
 		var ps []wfc.Coord
@@ -261,7 +297,7 @@ func growIsland(c *app.Ctx, n int) {
 		}
 		if model := g.Models[tile.Model]; model != nil {
 			x, z := g.Board.WorldXZ(pick)
-			rot := float32(60 * g.Rng.Intn(6))
+			rot := float32(60 * g.Board.RotationStep(pick, tile, g.Rng))
 			render3d.SpawnModel(c.Commands(), model,
 				render3d.XForm().At(x, 0, z).EulerDeg(0, rot, 0))
 		}

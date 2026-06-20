@@ -12,6 +12,7 @@ package wfc
 import (
 	"math"
 	"math/rand"
+	"strings"
 )
 
 // Terrain is the material at a hex tile's rim. The five terrains form a natural
@@ -46,31 +47,113 @@ func Compatible(a, b Terrain) bool {
 // are all Grass); that is exactly what gives a collapsed cell more than one
 // valid choice, so the same rules can produce a different-looking island each
 // time.
+//
+// Weight is the relative chance of this tile being picked among the legal
+// choices for its terrain. Bare land is common, natural features less so, and
+// the Kenney building tiles are rare landmarks — so a collapsed grass cell is
+// usually plain grass, occasionally a forest or hill, and now and then a
+// village, castle or windmill. A zero weight is treated as 1.
 type TileDef struct {
 	Model   string // base GLB filename without extension, e.g. "grass-forest"
 	Terrain Terrain
+	Weight  int
 }
 
+// weight returns the tile's selection weight, treating an unset (zero) weight
+// as 1 so a tile is never impossible to pick.
+func (t TileDef) weight() int {
+	if t.Weight <= 0 {
+		return 1
+	}
+	return t.Weight
+}
+
+// Selection-weight tiers. The spread is wide on purpose: bare terrain should
+// dominate so islands read as wild, with the kit's structures scattered across
+// them as occasional settlements rather than wall-to-wall city.
+const (
+	wBare    = 60 // plain terrain — the default face of a cell
+	wFeature = 40 // a natural feature: forest, hill, rocks, dunes, mountain…
+	wIsland  = 20 // lone island, already gated to open water (see openWaterOnly)
+	wBuild   = 2  // a building landmark on grass
+	wHarbor  = 3  // a coastal building on the sand rim
+)
+
 // Tiles is the catalog the game collapses cells to. All tiles of a terrain are
-// interchangeable as far as the rules are concerned, so when the game collapses
-// a cell it picks among the matching tiles at random.
+// interchangeable as far as the adjacency rules are concerned; the game picks
+// among the matching ones at random, biased by Weight. The Kenney building
+// tiles ride on the same hex bases as the bare terrain — most sit on grass, so
+// they join the Grass pool; the dock and port carry a beach rim, so they join
+// Sand and only ever appear where the coast allows.
 var Tiles = []TileDef{
-	{"water", Water}, {"water-rocks", Water}, {"water-island", Water},
-	{"sand", Sand}, {"sand-desert", Sand}, {"sand-rocks", Sand},
-	{"grass", Grass}, {"grass-forest", Grass}, {"grass-hill", Grass},
-	{"dirt", Dirt}, {"dirt-lumber", Dirt},
-	{"stone", Stone}, {"stone-hill", Stone}, {"stone-mountain", Stone}, {"stone-rocks", Stone},
+	// Water.
+	{"water", Water, wBare}, {"water-rocks", Water, wFeature}, {"water-island", Water, wIsland},
+
+	// Sand — bare dunes, plus the two coastal harbours.
+	{"sand", Sand, wBare}, {"sand-desert", Sand, wFeature}, {"sand-rocks", Sand, wFeature},
+	{"building-dock", Sand, wHarbor}, {"building-port", Sand, wHarbor},
+
+	// Grass — bare meadow, natural features, then the village of buildings.
+	{"grass", Grass, wBare}, {"grass-forest", Grass, wFeature}, {"grass-hill", Grass, wFeature},
+	{"building-cabin", Grass, wBuild}, {"building-house", Grass, wBuild},
+	{"building-village", Grass, wBuild}, {"building-farm", Grass, wBuild},
+	{"building-sheep", Grass, wBuild}, {"building-market", Grass, wBuild},
+	{"building-mill", Grass, wBuild}, {"building-watermill", Grass, wBuild},
+	{"building-smelter", Grass, wBuild}, {"building-mine", Grass, wBuild},
+	{"building-tower", Grass, wBuild}, {"building-wall", Grass, wBuild},
+	{"building-walls", Grass, wBuild}, {"building-archery", Grass, wBuild},
+	{"building-castle", Grass, wBuild}, {"building-wizard-tower", Grass, wBuild},
+
+	// Dirt.
+	{"dirt", Dirt, wBare}, {"dirt-lumber", Dirt, wFeature},
+
+	// Stone.
+	{"stone", Stone, wBare}, {"stone-hill", Stone, wFeature},
+	{"stone-mountain", Stone, wFeature}, {"stone-rocks", Stone, wFeature},
 }
 
 const fullDomain = uint8(1<<terrainCount) - 1 // bitmask with every terrain possible
 
-// openWaterOnly lists tiles that, beyond their terrain's gradient rule, may only
-// be placed in open water: every neighbour must already be water (a collapsed
-// water tile, or the open ocean past the board edge). It's how "an island is
-// only allowed when everything around it is water" is enforced — the gradient
-// alone would let water-island sit against a beach.
-var openWaterOnly = map[string]bool{
+// Beyond the terrain gradient, a few tiles carry an extra placement rule about
+// the tiles already collapsed around them. These are what keep the kit's
+// special pieces believable: a lone island wants open sea, a harbour wants a
+// shoreline to dock against, and the buildings spread out into separate
+// settlements instead of fusing into one solid block. All three rules look only
+// at already-collapsed neighbours, so they compose cleanly with the gradient and
+// never need their own propagation pass.
+
+// needsOpenWater tiles may sit only where every neighbour is water — a collapsed
+// water tile, or the open ocean past the board edge. The gradient alone would
+// let an island sit against a beach; this is what holds it out in the sea.
+var needsOpenWater = map[string]bool{
 	"water-island": true,
+}
+
+// needsShore tiles must touch the sea: at least one neighbour has to be water (a
+// placed water tile, or open ocean off the board). They are the harbours — a
+// dock or port stranded on dry land, with no water to reach, makes no sense.
+var needsShore = map[string]bool{
+	"building-dock": true,
+	"building-port": true,
+}
+
+// orientedGreenEdge maps a directional tile to the axialDirs index its grassy
+// half faces when spawned with no Y rotation. The dock and port are water/grass
+// transition tiles: at rotation 0 the green half points at world +X, which is
+// axialDirs[0]. Spinning the model +60° advances the facing one index along
+// axialDirs, so at rotation step k the green half faces axialDirs[(edge+k)%6]
+// and the water half the opposite edge. Such a tile may only be placed where its
+// green half can face a grass tile, and it is turned to do so (see RotationStep).
+var orientedGreenEdge = map[string]int{
+	"building-dock": 0,
+	"building-port": 0,
+}
+
+// IsBuilding reports whether a tile model is one of the kit's structures; every
+// such model is named "building-…". Two buildings may not be neighbours, so each
+// collapsed settlement reads as its own landmark rather than an unbroken city.
+func IsBuilding(model string) bool {
+	return strings.HasPrefix(model, "building-")
 }
 
 // Coord is an axial hex coordinate. The grid uses flat-left/right-edge hexes
@@ -150,21 +233,76 @@ func (b *Board) Collapse(coord Coord, rng *rand.Rand) (TileDef, bool) {
 		if cell.Domain&(1<<t.Terrain) == 0 {
 			continue
 		}
-		if openWaterOnly[t.Model] && !b.allNeighboursWater(coord) {
-			continue // e.g. an island may only sit in open water
+		if !b.allows(coord, t) {
+			continue // fails an extra placement rule (open water / shore / spacing)
 		}
 		cands = append(cands, i)
 	}
 	if len(cands) == 0 {
 		return TileDef{}, false
 	}
-	pick := cands[rng.Intn(len(cands))]
+	pick := b.weightedPick(coord, cands, rng)
 	cell.Tile = pick
 	cell.Collapsed = true
 	cell.Domain = 1 << Tiles[pick].Terrain
 	b.anyCollapsed = true
 	b.propagate(coord)
 	return Tiles[pick], true
+}
+
+// clusterBias is how strongly a cell prefers to match the terrain of its
+// already-collapsed neighbours. Each neighbour that shares a candidate's terrain
+// multiplies that candidate's weight by clusterBias, so a cell ringed by water
+// becomes water with overwhelming odds (four matching neighbours make its
+// terrain clusterBias⁴ ≈ 39× likelier), three matching neighbours strongly
+// favour it, and a lone neighbour only nudges. This is what turns the legal-but-
+// arbitrary gradient picks into coherent regions — open sea, broad beaches,
+// forests and mountain ranges — instead of a salt-and-pepper scatter. It is a
+// soft bias layered on top of the hard gradient: it only ever re-weights choices
+// the rules already allow, so it can never produce an illegal neighbour.
+const clusterBias = 2.5
+
+// weightedPick chooses a tile index from cands, biased by two things: each
+// tile's base Weight (bare terrain common, buildings rare) and how well its
+// terrain matches coord's already-collapsed neighbours (terrain coherence — see
+// clusterBias). Candidates of the same terrain share the same neighbour bonus,
+// so the bias steers which *terrain* a cell takes while the base weights still
+// decide which variant of it. cands must be non-empty.
+func (b *Board) weightedPick(coord Coord, cands []int, rng *rand.Rand) int {
+	counts := b.neighbourTerrainCounts(coord)
+	weights := make([]float64, len(cands))
+	var total float64
+	for j, i := range cands {
+		w := float64(Tiles[i].weight()) * math.Pow(clusterBias, float64(counts[Tiles[i].Terrain]))
+		weights[j] = w
+		total += w
+	}
+	roll := rng.Float64() * total
+	for j, i := range cands {
+		roll -= weights[j]
+		if roll < 0 {
+			return i
+		}
+	}
+	return cands[len(cands)-1] // unreachable: weights sum to total
+}
+
+// neighbourTerrainCounts tallies, per terrain, how many of coord's six
+// neighbours have already settled on that terrain. Open ocean past the board
+// edge counts as water, so coastlines naturally pull more sea around themselves
+// and islands keep a watery border.
+func (b *Board) neighbourTerrainCounts(coord Coord) [terrainCount]int {
+	var counts [terrainCount]int
+	for _, d := range axialDirs {
+		cell := b.Cells[Coord{coord.Q + d.Q, coord.R + d.R}]
+		switch {
+		case cell == nil:
+			counts[Water]++ // open ocean off the board
+		case cell.Collapsed:
+			counts[Tiles[cell.Tile].Terrain]++
+		}
+	}
+	return counts
 }
 
 // propagate runs arc consistency outward from a cell whose domain just changed:
@@ -196,6 +334,121 @@ func (b *Board) propagate(seed Coord) {
 			}
 		}
 	}
+}
+
+// allows reports whether tile t may be collapsed at coord given the extra
+// placement rules layered on top of the terrain gradient. The gradient itself is
+// already enforced by the cell's domain, so this only checks the per-tile rules,
+// and only ever inspects already-collapsed neighbours. Bare terrain carries no
+// rule, so for any terrain still in the domain at least its plain tile always
+// passes — the candidate set can never be emptied by these rules.
+func (b *Board) allows(coord Coord, t TileDef) bool {
+	if needsOpenWater[t.Model] && !b.allNeighboursWater(coord) {
+		return false
+	}
+	if needsShore[t.Model] && !b.touchesWater(coord) {
+		return false
+	}
+	if !b.canOrient(coord, t.Model) {
+		return false // a dock/port with no grass neighbour for its green half to face
+	}
+	if IsBuilding(t.Model) && b.touchesBuilding(coord) {
+		return false
+	}
+	return true
+}
+
+// neighbourAt returns the terrain across edge e (axialDirs[e]) and whether that
+// neighbour is decided: a collapsed tile gives its own terrain, open ocean off
+// the board counts as Water, and an empty in-bounds cell is undecided (ok=false).
+func (b *Board) neighbourAt(coord Coord, e int) (Terrain, bool) {
+	d := axialDirs[e]
+	cell := b.Cells[Coord{coord.Q + d.Q, coord.R + d.R}]
+	switch {
+	case cell == nil:
+		return Water, true // open ocean past the edge
+	case cell.Collapsed:
+		return Tiles[cell.Tile].Terrain, true
+	default:
+		return 0, false
+	}
+}
+
+// canOrient reports whether a directional tile may be placed at coord: it must
+// have at least one rotation whose grassy half faces an actual grass tile, so
+// "the dock's green part connects to a green tile" can be honoured. Tiles that
+// are not directional are unconstrained here.
+func (b *Board) canOrient(coord Coord, model string) bool {
+	edge, oriented := orientedGreenEdge[model]
+	if !oriented {
+		return true
+	}
+	for k := 0; k < 6; k++ {
+		if t, ok := b.neighbourAt(coord, (edge+k)%6); ok && t == Grass {
+			return true
+		}
+	}
+	return false
+}
+
+// RotationStep returns the spawn rotation (0..5, ×60°) for tile t at coord. A
+// directional tile (dock/port) is turned so its grassy half faces a grass
+// neighbour — and, among the rotations that achieve that, so its water half
+// points at the sea where possible. Every other tile gets a random spin for
+// variety. It assumes a directional tile was only placed where canOrient held,
+// so a valid facing always exists.
+func (b *Board) RotationStep(coord Coord, t TileDef, rng *rand.Rand) int {
+	edge, oriented := orientedGreenEdge[t.Model]
+	if !oriented {
+		return rng.Intn(6)
+	}
+	best, bestScore := 0, -1
+	for k := 0; k < 6; k++ {
+		if gt, ok := b.neighbourAt(coord, (edge+k)%6); !ok || gt != Grass {
+			continue // green half must face grass
+		}
+		score := 0 // prefer the water half to face open water, then a beach
+		if wt, ok := b.neighbourAt(coord, (edge+k+3)%6); ok {
+			switch wt {
+			case Water:
+				score = 2
+			case Sand:
+				score = 1
+			}
+		}
+		if score > bestScore {
+			best, bestScore = k, score
+		}
+	}
+	return best
+}
+
+// touchesWater reports whether any neighbour of coord is water — a collapsed
+// water tile, or off the board (open ocean). It's the shoreline test a harbour
+// needs: somewhere adjacent to dock against.
+func (b *Board) touchesWater(coord Coord) bool {
+	for _, d := range axialDirs {
+		cell := b.Cells[Coord{coord.Q + d.Q, coord.R + d.R}]
+		if cell == nil {
+			return true // open ocean past the edge is sea enough to dock against
+		}
+		if cell.Collapsed && Tiles[cell.Tile].Terrain == Water {
+			return true
+		}
+	}
+	return false
+}
+
+// touchesBuilding reports whether any neighbour of coord has already collapsed to
+// a building, used to keep settlements from fusing into one solid block.
+func (b *Board) touchesBuilding(coord Coord) bool {
+	for _, d := range axialDirs {
+		cell := b.Cells[Coord{coord.Q + d.Q, coord.R + d.R}]
+		if cell != nil && cell.Collapsed && IsBuilding(Tiles[cell.Tile].Model) {
+			return true
+		}
+	}
+	return false
 }
 
 // allNeighboursWater reports whether every neighbour of coord is water: a
