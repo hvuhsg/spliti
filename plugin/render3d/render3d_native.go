@@ -26,6 +26,14 @@ type platform struct {
 func (p Plugin) Build(a *app.App) {
 	runtime.LockOSThread()
 
+	// Headless: install resources + world systems with no window, GPU instance,
+	// surface, or device. Returns before any glfw/wgpu call so it runs on a
+	// machine with no GPU or display.
+	if p.Headless {
+		finishBuildHeadless(p, a)
+		return
+	}
+
 	width, height, title := p.sizeDefaults()
 
 	if err := glfw.Init(); err != nil {

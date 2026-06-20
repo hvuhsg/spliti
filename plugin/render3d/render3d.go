@@ -69,6 +69,15 @@ type Plugin struct {
 	// running scene live. Native-only and intended for development; ignored on
 	// wasm/headless builds.
 	HotReload bool
+
+	// Headless installs the renderer's resources, components, and world-mutating
+	// systems (animation, transform propagation, camera-entity drive) WITHOUT
+	// creating a GPU device, swapchain, or window. The mesh/material registries
+	// run in CPU-only mode (geometry + bounds retained, nothing uploaded) so a
+	// game's scene setup still runs and the world can be dumped on a machine with
+	// no GPU or display — the agent verify loop (`spliti check`) on headless CI.
+	// Nothing is rendered and no frame can be captured in this mode.
+	Headless bool
 }
 
 // Color is an RGBA color in linear-ish [0,1] components, used for the clear
@@ -85,6 +94,12 @@ func (c Color) orOpaque() Color {
 // GPU is the shared rendering resource. Systems read it via app.GetResource[GPU].
 // All fields are owned by the plugin; treat as opaque.
 type GPU struct {
+	// headless is set by finishBuildHeadless: no device/surface/config/window
+	// exist, the registries run CPU-only, and the GPU-bound systems are not
+	// installed. headlessW/H carry the configured size so Size still answers.
+	headless             bool
+	headlessW, headlessH int
+
 	// plat holds platform-specific handles (the GLFW window on native, the
 	// canvas + DOM callbacks on js). Its layout is defined per build tag.
 	plat platform
@@ -447,7 +462,12 @@ func releaseGPU(g *GPU) {
 	if g.instance != nil {
 		g.instance.Release()
 	}
-	g.platformShutdown()
+	// Headless never created a window or initialized the platform (no glfw.Init
+	// on native), so there is nothing to tear down — and calling platformShutdown
+	// would terminate a GLFW that was never started.
+	if !g.headless {
+		g.platformShutdown()
+	}
 }
 
 // Size returns the current framebuffer size in pixels, or 0,0 if the GPU
@@ -457,6 +477,9 @@ func Size(c *app.Ctx) (int, int) {
 	g := app.GetResource[GPU](c)
 	if g == nil {
 		return 0, 0
+	}
+	if g.headless {
+		return g.headlessW, g.headlessH
 	}
 	return int(g.config.Width), int(g.config.Height)
 }
@@ -468,6 +491,9 @@ func WindowSize(c *app.Ctx) (int, int) {
 	g := app.GetResource[GPU](c)
 	if g == nil {
 		return 0, 0
+	}
+	if g.headless {
+		return g.headlessW, g.headlessH
 	}
 	return g.windowSize()
 }

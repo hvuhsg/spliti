@@ -148,7 +148,8 @@ func TestGenerateCheckTarget(t *testing.T) {
 		`rng.Plugin{Seed: *seed}`,
 		`scenes.Main`,
 		`check.Run(a, check.Options{`,
-		`Capture:        screenshot.Save`,
+		`render3d.Plugin{`,
+		`Headless: true`,
 		"//go:build !js",
 	} {
 		if !strings.Contains(s, want) {

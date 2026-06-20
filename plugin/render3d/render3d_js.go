@@ -35,6 +35,13 @@ const canvasID = "spliti-canvas"
 // then registers DOM listeners that translate keyboard/mouse/resize into the
 // shared input buffers (as plugin/inputs events).
 func (p Plugin) Build(a *app.App) {
+	// Headless: install resources + world systems with no canvas, GPU instance,
+	// surface, or device (a logic-only run in the browser/node).
+	if p.Headless {
+		finishBuildHeadless(p, a)
+		return
+	}
+
 	width, height, title := p.sizeDefaults()
 
 	doc := js.Global().Get("document")

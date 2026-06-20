@@ -78,6 +78,12 @@ type MaterialRegistry struct {
 
 func newMaterialRegistry(g *GPU) *MaterialRegistry {
 	r := &MaterialRegistry{gpu: g, byRef: make(map[string]*materialGPU)}
+	// Headless (no device): keep the registry CPU-only. The default textures and
+	// material are GPU uploads; upload() short-circuits to a CPU record below.
+	if g.device == nil {
+		r.defaultMat = r.upload(Material{})
+		return r
+	}
 	r.defaults = newDefaultTextures(g)
 	r.defaultMat = r.upload(Material{
 		BaseColor: Color{R: 0.8, G: 0.8, B: 0.8, A: 1},
@@ -122,6 +128,12 @@ func (r *MaterialRegistry) Keys() []string {
 // shader which maps are real.
 func (r *MaterialRegistry) upload(mat Material) *materialGPU {
 	g := r.gpu
+	// Headless: no device to upload to. Keep just the CPU-derived flags the
+	// non-GPU path still reads (DoubleSided selects a pipeline that is never used
+	// here, but preserving it keeps the record faithful).
+	if g.device == nil {
+		return &materialGPU{doubleSided: mat.DoubleSided}
+	}
 	bc := mat.BaseColor
 	if bc == (Color{}) {
 		bc = Color{R: 0.8, G: 0.8, B: 0.8, A: 1}

@@ -248,11 +248,19 @@ Severity: 🔴 blocking the loop · 🟠 high leverage · 🟡 productization
       systems under the Manual clock + seeded RNG and writes `world.json` (+ an
       optional PNG). Verified end-to-end on the scaffolded 3D game: two 30-frame
       runs are byte-identical, the spinning entities' quaternions advance as
-      coded, and a 2560×1440 PNG is captured. Remaining follow-up: a render3d
-      **resource-only headless mode** so 3D-game (not just logic-only) checks run
-      on a GPU-less CI — the generated target currently wires the GPU render3d
-      (scene setup needs its registries), so 3D checks run wherever `spliti edit`
-      runs. That is a renderer refactor, not a harness gap.
+      coded, and a 2560×1440 PNG is captured. **Follow-up done — render3d
+      resource-only headless mode** (`render3d.Plugin{Headless: true}`): the
+      plugin installs its registries, camera, and the world-mutating systems
+      (animation, transform propagation, camera-entity drive) with **no GPU
+      device, swapchain, or window**, and the mesh/material registries run
+      CPU-only (geometry + bounds retained, nothing uploaded). The generated
+      `.spliti/check` target now wires `Headless: true`, so a **3D game's**
+      `spliti check` runs on a GPU-less / display-less CI runner (it still needs
+      `CGO_ENABLED=1` to compile the wgpu binding, but never opens a window or
+      requests an adapter). Rendering — and therefore `-png` — needs a real GPU
+      build, so the headless target makes `-png` a no-op with a notice; the world
+      dump works everywhere. Verified on a freshly-scaffolded 3D game: two runs
+      byte-identical, the spinner quaternion advances, no window opens.
 - [x] 🟠 **AI-3 — Agent context surface** — done: `AGENTS.md` at repo root leads
       with the verify loop (`spliti check` → read `world.json` → iterate), then
       the project layout, ECS-in-one-screen, schedule stages, determinism rules,
