@@ -106,6 +106,13 @@ input-reading and rendering-facing work in `Update`. Order within a stage with
 | `ui` | Dear ImGui GPU UI (dev tools) |
 | `network` | lockstep multiplayer over TCP |
 
+For persisting **player data** (progress, settings, high scores) at runtime, use
+the `save` package (not a plugin): `save.Open("mygame")` → a `Store` of JSON
+slots, `Write(slot, &v)` / `Read(slot, &v)` (`ErrNotFound` on first run), `Has`,
+`Delete`, `List`. Atomic files under the OS config dir on native, `localStorage`
+in the browser. Static scene content stays in Go source — `save` is only for
+mutable per-player state.
+
 `defaultplugins.Plugins{}` bundles time + terminal + input + tui for terminal
 games. GPU games wire `render3d`/`webgpu` explicitly (cgo, `CGO_ENABLED=1`).
 
