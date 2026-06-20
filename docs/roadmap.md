@@ -78,9 +78,20 @@ Severity: 🔴 blocking · 🟠 high · 🟡 moderate / genre-dependent
       (`Plugin.HotReload`, native-only fsnotify, no-op on wasm). Still missing:
       texture atlases (glTF skinning, the other half of the item below, is now
       done).
-- [ ] **Runtime save/load** — scenes live in Go source (the editor's
-      code-as-truth format), so static content needs no loader; shipped games
-      still can't persist *player data*. Expose a save path usable at runtime.
+- [x] **Runtime save/load** — done: the `save` package persists game-defined
+      data (player progress, settings, high scores) at runtime and reads it back.
+      Scenes stay in Go source (no loader needed for static content); this covers
+      the other half — mutable per-player data. `save.Open("mygame")` returns a
+      `Store`, a namespaced key/value space of JSON slots: `Write(slot, &v)` /
+      `Read(slot, &v)` (with `ErrNotFound` for first-run defaults), plus `Has`,
+      `Delete`, `List`, `ReadRaw`. The backend is platform-split behind one API —
+      atomic JSON files under the OS user-config dir on native (temp + rename, so
+      a crash mid-write never corrupts an existing save), `localStorage` namespaced
+      by app ID in the browser. Deliberately **not** full-world serialization: the
+      game owns a portable, versionable schema (full-world restore would need a
+      name→type registry + entity remapping — a separate, larger item). Slot names
+      are validated against path traversal. Tested round-trip / overwrite / delete
+      / list / atomicity / validation on native; both targets build.
 
 ## 🟡 Moderate / genre-dependent
 
@@ -200,9 +211,13 @@ product decision (most of all the netcode model).
 
 ## Suggested next three (for a 3D game)
 
-1. Runtime save/load — shipped games need to persist player data
+1. ~~Runtime save/load~~ — done (`save` package: per-player JSON store, native + wasm)
 2. ~~glTF animation/skinning~~ — done (keyframe playback + GPU skeletal skinning)
 3. ~~Asset pipeline: async loads + load-failure recovery~~ — done (AssetLoader)
+
+The 3D-game blockers are now all cleared; the open work is genre/scale features
+(particles, shadows/post, netcode-beyond-lockstep, parallel scheduling) and the
+deferred architectural rewrites above.
 
 (For 2D games, sprite animation remains the top gap.)
 
@@ -248,11 +263,19 @@ Severity: 🔴 blocking the loop · 🟠 high leverage · 🟡 productization
       systems under the Manual clock + seeded RNG and writes `world.json` (+ an
       optional PNG). Verified end-to-end on the scaffolded 3D game: two 30-frame
       runs are byte-identical, the spinning entities' quaternions advance as
-      coded, and a 2560×1440 PNG is captured. Remaining follow-up: a render3d
-      **resource-only headless mode** so 3D-game (not just logic-only) checks run
-      on a GPU-less CI — the generated target currently wires the GPU render3d
-      (scene setup needs its registries), so 3D checks run wherever `spliti edit`
-      runs. That is a renderer refactor, not a harness gap.
+      coded, and a 2560×1440 PNG is captured. **Follow-up done — render3d
+      resource-only headless mode** (`render3d.Plugin{Headless: true}`): the
+      plugin installs its registries, camera, and the world-mutating systems
+      (animation, transform propagation, camera-entity drive) with **no GPU
+      device, swapchain, or window**, and the mesh/material registries run
+      CPU-only (geometry + bounds retained, nothing uploaded). The generated
+      `.spliti/check` target now wires `Headless: true`, so a **3D game's**
+      `spliti check` runs on a GPU-less / display-less CI runner (it still needs
+      `CGO_ENABLED=1` to compile the wgpu binding, but never opens a window or
+      requests an adapter). Rendering — and therefore `-png` — needs a real GPU
+      build, so the headless target makes `-png` a no-op with a notice; the world
+      dump works everywhere. Verified on a freshly-scaffolded 3D game: two runs
+      byte-identical, the spinner quaternion advances, no window opens.
 - [x] 🟠 **AI-3 — Agent context surface** — done: `AGENTS.md` at repo root leads
       with the verify loop (`spliti check` → read `world.json` → iterate), then
       the project layout, ECS-in-one-screen, schedule stages, determinism rules,

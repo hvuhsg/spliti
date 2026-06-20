@@ -199,7 +199,7 @@ func (p *Project) Manifest() string {
 	w("Module `%s`. Scanned from source — regenerate any time with `spliti manifest`.\n\n", p.Module)
 
 	w("## Verify your changes\n\n")
-	w("```\nspliti check -ticks 120 -out world.json   # deterministic headless run → state JSON\nspliti check -ticks 120 -png frame.png    # also capture a frame (needs a GPU)\n```\n")
+	w("```\nspliti check -ticks 120 -out world.json   # deterministic headless run → state JSON (no GPU/display)\n```\n")
 	w("Same code + seed → byte-identical `world.json`. Diff it across edits. See AGENTS.md.\n\n")
 
 	w("## Scenes\n\n")
@@ -509,7 +509,6 @@ import (
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
 	"github.com/hvuhsg/spliti/plugin/rng"
-	"github.com/hvuhsg/spliti/plugin/screenshot"
 	splititime "github.com/hvuhsg/spliti/plugin/time"
 	"github.com/hvuhsg/spliti/schedule"
 
@@ -523,19 +522,27 @@ func main() {
 	ticks := flag.Int("ticks", 120, "number of frames to run")
 	seed := flag.Int64("seed", 1, "RNG seed for plugin/rng")
 	out := flag.String("out", "world.json", "path to write the world dump JSON")
-	png := flag.String("png", "", "path to write a final-frame PNG (needs a GPU)")
+	png := flag.String("png", "", "(unsupported in the headless check target — needs a GPU build)")
 	flag.Parse()
+
+	// The check target runs render3d in Headless mode: scene setup and the
+	// world-mutating systems run with no GPU or display, so the world dump works
+	// on headless CI. Rendering — and therefore -png — needs a real GPU build
+	// (spliti edit / a normal game binary).
+	if *png != "" {
+		fmt.Fprintln(os.Stderr, "check: -png is not supported in the headless check target (rendering needs a GPU); world dump still written")
+	}
 
 	a := app.New()
 	a.AddPlugins(
 		splititime.Plugin{Manual: true},
 		rng.Plugin{Seed: *seed},
 		render3d.Plugin{
+			Headless: true,
 			Width:  {{if .Config.Window.Width}}{{.Config.Window.Width}}{{else}}1280{{end}},
 			Height: {{if .Config.Window.Height}}{{.Config.Window.Height}}{{else}}720{{end}},
 			Title:  "{{if .Config.Window.Title}}{{.Config.Window.Title}}{{else}}{{.Config.Name}}{{end}} — spliti check",
 			Ambient: m.Vec3{X: 0.05, Y: 0.05, Z: 0.06},
-			Samples: 4,
 		},
 {{- if .InputFunc}}
 		actions.Plugin{Map: game.{{.InputFunc}}()},
@@ -548,10 +555,8 @@ func main() {
 	))
 
 	res, err := check.Run(a, check.Options{
-		Ticks:          *ticks,
-		WorldPath:      *out,
-		ScreenshotPath: *png,
-		Capture:        screenshot.Save,
+		Ticks:     *ticks,
+		WorldPath: *out,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "check:", err)

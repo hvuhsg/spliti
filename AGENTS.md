@@ -18,8 +18,8 @@ look at the screen. Use `spliti check`:
 spliti new mygame && cd mygame      # scaffold (never hand-roll the layout)
 # ... edit game code ...
 spliti check -ticks 120 -out world.json   # run 120 deterministic frames, dump state
-# read world.json, assert on it, fix, repeat
-spliti check -ticks 120 -png frame.png    # also capture a PNG (needs a GPU/display)
+# read world.json, assert on it, fix, repeat — works for 3D games too,
+# headless: no GPU or display needed (-png is unsupported here; it needs a GPU build)
 ```
 
 `spliti check` runs the game's default scene + systems under a **virtual clock**
@@ -106,14 +106,26 @@ input-reading and rendering-facing work in `Update`. Order within a stage with
 | `ui` | Dear ImGui GPU UI (dev tools) |
 | `network` | lockstep multiplayer over TCP |
 
+For persisting **player data** (progress, settings, high scores) at runtime, use
+the `save` package (not a plugin): `save.Open("mygame")` → a `Store` of JSON
+slots, `Write(slot, &v)` / `Read(slot, &v)` (`ErrNotFound` on first run), `Has`,
+`Delete`, `List`. Atomic files under the OS config dir on native, `localStorage`
+in the browser. Static scene content stays in Go source — `save` is only for
+mutable per-player state.
+
 `defaultplugins.Plugins{}` bundles time + terminal + input + tui for terminal
 games. GPU games wire `render3d`/`webgpu` explicitly (cgo, `CGO_ENABLED=1`).
 
 ## Gotchas
 
-- GPU backends (`render3d`, `webgpu`, `ui`, the editor, and `spliti check` on a
-  3D game) need `CGO_ENABLED=1` and a GPU/display. Logic-only checks via the
-  `check` package don't.
+- GPU backends (`render3d`, `webgpu`, `ui`, the editor) need `CGO_ENABLED=1` and
+  a GPU/display. **`spliti check` on a 3D game does not need a GPU or display**:
+  the generated check target runs render3d in headless mode (no device, no
+  window), so the world dump works on a headless CI runner (it still compiles
+  with `CGO_ENABLED=1` for the wgpu binding). `-png` is the exception — capturing
+  a frame needs a real GPU build, so it is a no-op (with a notice) under
+  `spliti check`. Logic-only checks via the `check` package need neither cgo nor
+  a GPU.
 - `.spliti/` (editor + check targets) is generated and git-ignored; never hand-edit it.
 - Scene files (`game/scenes/*.go`) are the editor's save format — keep spawn
   arguments literal so the editor can round-trip them.

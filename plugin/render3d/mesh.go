@@ -72,6 +72,25 @@ func (r *MeshRegistry) Load(ref string, mesh *Mesh) error {
 	// the skinned pipeline's vertex layout reads them at skinVertexStride. Static
 	// meshes upload the plain Vertex slice. Bounds/picking always use Vertices.
 	skinned := len(mesh.SkinVertices) > 0
+
+	// Headless (no device): retain the CPU geometry and bounding sphere but upload
+	// nothing. The render systems that read the GPU buffers are not installed in
+	// this mode; picking and bounds (CPU/Keys) keep working.
+	if g.device == nil {
+		if old := r.byRef[ref]; old != nil {
+			old.release()
+		}
+		center, radius := boundingSphere(mesh.Vertices)
+		r.byRef[ref] = &meshGPU{
+			indexCount:   uint32(len(mesh.Indices)),
+			cpu:          mesh,
+			skinned:      skinned,
+			boundsCenter: center,
+			boundsRadius: radius,
+		}
+		return nil
+	}
+
 	var vbytes []byte
 	if skinned {
 		vbytes = wgpu.ToBytes(mesh.SkinVertices)

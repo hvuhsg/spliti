@@ -30,6 +30,18 @@ func NewMesh(c *app.Ctx, t Transform3D, mesh, material string) ecs.Entity {
 		&MeshRenderer{Mesh: mesh}, &MaterialRef{Material: material})
 }
 
+// NewNode creates a transform-only entity immediately and returns it: a node
+// with Transform3D + GlobalTransform but no renderable. It is the scene-graph
+// "empty" — a parent that groups children under one movable transform (the same
+// shape as a model root). Prefab functions use it as the root of a composite
+// subtree, then parent meshes/lights under it. The GlobalTransform is recomputed
+// from the local transform every frame, so its initial value is just a
+// placeholder. Do not call while a query is iterating.
+func NewNode(c *app.Ctx, t Transform3D) ecs.Entity {
+	mp := generic.NewMap2[Transform3D, GlobalTransform](c.World())
+	return mp.NewWith(&t, &GlobalTransform{Matrix: m.Identity4()})
+}
+
 // NewPointLight creates a point-light entity immediately and returns it — the
 // prefab-friendly counterpart of SpawnPointLight.
 func NewPointLight(c *app.Ctx, t Transform3D, light PointLight) ecs.Entity {
