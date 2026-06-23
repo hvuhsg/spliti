@@ -73,65 +73,115 @@ func SpawnModel(c *app.Commands, model *Model, rootTransform Transform3D) {
 		return
 	}
 	c.Add(func(w *ecs.World) {
-		rootMap := generic.NewMap2[Transform3D, GlobalTransform](w)
-		nodeMap := generic.NewMap3[Transform3D, GlobalTransform, Parent](w)
-		primMap := generic.NewMap5[Transform3D, GlobalTransform, MeshRenderer, MaterialRef, Parent](w)
-		skinnedPrimMap := generic.NewMap6[Transform3D, GlobalTransform, MeshRenderer, MaterialRef, Parent, SkinnedMesh](w)
-		ident := func() *GlobalTransform { return &GlobalTransform{Matrix: m.Identity4()} }
+		instantiateModel(w, model, rootTransform, nil)
+	})
+}
 
-		rt := rootTransform
-		root := rootMap.NewWith(&rt, ident())
+// NewModel instantiates a glTF Model immediately (unlike SpawnModel, which
+// queues through Commands) and returns the synthetic root entity, so callers can
+// drive it: move/rotate the root's Transform3D to move the whole model, query
+// the root, or remove the instance with DespawnModelTree. Every entity in the
+// instance is tagged ModelTree{Root}. Do not call while a query is iterating.
+func NewModel(c *app.Ctx, model *Model, rootTransform Transform3D) ecs.Entity {
+	if model == nil {
+		return ecs.Entity{}
+	}
+	w := c.World()
+	var all []ecs.Entity
+	root := instantiateModel(w, model, rootTransform, func(e ecs.Entity) { all = append(all, e) })
+	tag := generic.NewMap1[ModelTree](w)
+	for _, e := range all {
+		tag.Assign(e, &ModelTree{Root: root})
+	}
+	return root
+}
 
-		// Track each node's spawned entity so an Animator can address them by index.
-		nodeEntities := make([]ecs.Entity, len(model.Nodes))
-
-		var spawnNode func(idx int, parent ecs.Entity)
-		spawnNode = func(idx int, parent ecs.Entity) {
-			if idx < 0 || idx >= len(model.Nodes) {
-				return
-			}
-			n := model.Nodes[idx]
-			t := n.Transform
-			p := Parent{Entity: parent}
-			e := nodeMap.NewWith(&t, ident(), &p)
-			nodeEntities[idx] = e
-			for i, mesh := range n.MeshRefs {
-				mat := ""
-				if i < len(n.MatRefs) {
-					mat = n.MatRefs[i]
-				}
-				pt := NewTransform3D(m.Vec3{})
-				pp := Parent{Entity: e}
-				mr := MeshRenderer{Mesh: mesh}
-				ref := MaterialRef{Material: mat}
-				if n.Skin >= 0 && n.Skin < len(model.Skins) {
-					// Skinned primitive: carry a SkinnedMesh so computeJointMatrices
-					// and the skinned pipeline pick it up. Rig is the model root.
-					sm := SkinnedMesh{Rig: root, SkinIdx: n.Skin, Model: model}
-					skinnedPrimMap.NewWith(&pt, ident(), &mr, &ref, &pp, &sm)
-				} else {
-					primMap.NewWith(&pt, ident(), &mr, &ref, &pp)
-				}
-			}
-			for _, child := range n.Children {
-				spawnNode(child, e)
-			}
-		}
-		for _, r := range model.Roots {
-			spawnNode(r, root)
-		}
-
-		// Models with clips or skins get an AnimationRig (node->entity map) on the
-		// root so the Animator can drive node transforms and computeJointMatrices can
-		// resolve joint world matrices. The Animator plays the first clip looped; it
-		// is inert when the model has no animations (a skin-only model).
-		if len(model.Animations) > 0 || len(model.Skins) > 0 {
-			animMap := generic.NewMap2[Animator, AnimationRig](w)
-			animMap.Assign(root,
-				&Animator{Model: model, Clip: 0, Speed: 1, Loop: true, Playing: len(model.Animations) > 0},
-				&AnimationRig{NodeEntities: nodeEntities})
+// DespawnModelTree removes every entity of the model instance whose root is the
+// given entity (as tagged by NewModel). It is queued through Commands, so it is
+// safe to call from a system.
+func DespawnModelTree(c *app.Ctx, root ecs.Entity) {
+	var del []ecs.Entity
+	app.Query1[ModelTree](c, func(e ecs.Entity, mt *ModelTree) {
+		if mt.Root == root {
+			del = append(del, e)
 		}
 	})
+	for _, e := range del {
+		c.Commands().Despawn(e)
+	}
+}
+
+// instantiateModel builds the entity tree for a model under a synthetic root and
+// returns the root. If onSpawn is non-nil it is called for every created entity
+// (root, nodes, primitives), in creation order — used by NewModel to tag and
+// collect the instance.
+func instantiateModel(w *ecs.World, model *Model, rootTransform Transform3D, onSpawn func(ecs.Entity)) ecs.Entity {
+	rootMap := generic.NewMap2[Transform3D, GlobalTransform](w)
+	nodeMap := generic.NewMap3[Transform3D, GlobalTransform, Parent](w)
+	primMap := generic.NewMap5[Transform3D, GlobalTransform, MeshRenderer, MaterialRef, Parent](w)
+	skinnedPrimMap := generic.NewMap6[Transform3D, GlobalTransform, MeshRenderer, MaterialRef, Parent, SkinnedMesh](w)
+	ident := func() *GlobalTransform { return &GlobalTransform{Matrix: m.Identity4()} }
+	emit := func(e ecs.Entity) {
+		if onSpawn != nil {
+			onSpawn(e)
+		}
+	}
+
+	rt := rootTransform
+	root := rootMap.NewWith(&rt, ident())
+	emit(root)
+
+	// Track each node's spawned entity so an Animator can address them by index.
+	nodeEntities := make([]ecs.Entity, len(model.Nodes))
+
+	var spawnNode func(idx int, parent ecs.Entity)
+	spawnNode = func(idx int, parent ecs.Entity) {
+		if idx < 0 || idx >= len(model.Nodes) {
+			return
+		}
+		n := model.Nodes[idx]
+		t := n.Transform
+		p := Parent{Entity: parent}
+		e := nodeMap.NewWith(&t, ident(), &p)
+		emit(e)
+		nodeEntities[idx] = e
+		for i, mesh := range n.MeshRefs {
+			mat := ""
+			if i < len(n.MatRefs) {
+				mat = n.MatRefs[i]
+			}
+			pt := NewTransform3D(m.Vec3{})
+			pp := Parent{Entity: e}
+			mr := MeshRenderer{Mesh: mesh}
+			ref := MaterialRef{Material: mat}
+			if n.Skin >= 0 && n.Skin < len(model.Skins) {
+				// Skinned primitive: carry a SkinnedMesh so computeJointMatrices
+				// and the skinned pipeline pick it up. Rig is the model root.
+				sm := SkinnedMesh{Rig: root, SkinIdx: n.Skin, Model: model}
+				emit(skinnedPrimMap.NewWith(&pt, ident(), &mr, &ref, &pp, &sm))
+			} else {
+				emit(primMap.NewWith(&pt, ident(), &mr, &ref, &pp))
+			}
+		}
+		for _, child := range n.Children {
+			spawnNode(child, e)
+		}
+	}
+	for _, r := range model.Roots {
+		spawnNode(r, root)
+	}
+
+	// Models with clips or skins get an AnimationRig (node->entity map) on the
+	// root so the Animator can drive node transforms and computeJointMatrices can
+	// resolve joint world matrices. The Animator plays the first clip looped; it
+	// is inert when the model has no animations (a skin-only model).
+	if len(model.Animations) > 0 || len(model.Skins) > 0 {
+		animMap := generic.NewMap2[Animator, AnimationRig](w)
+		animMap.Assign(root,
+			&Animator{Model: model, Clip: 0, Speed: 1, Loop: true, Playing: len(model.Animations) > 0},
+			&AnimationRig{NodeEntities: nodeEntities})
+	}
+	return root
 }
 
 // SpawnPointLight queues a point light at the given transform. The light's world

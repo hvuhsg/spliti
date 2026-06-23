@@ -219,6 +219,10 @@ func (p Plugin) Build(a *app.App) {
 	st := newState(p)
 	app.InsertResource(a, st)
 
+	// Marker so game code can tell it is running inside the editor and disable
+	// behavior that must not run here (e.g. capturing the mouse for mouselook).
+	app.InsertResource(a, &app.EditorMode{})
+
 	// render3d.Build (registered first) has already created the window and its
 	// Cocoa menu bar, so the native "File" menu can be installed now. Off
 	// darwin this is a no-op and the commands stay in the in-app menu bar.

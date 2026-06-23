@@ -67,7 +67,16 @@ func (p Plugin) Build(a *app.App) {
 		g.keyEvents = append(g.keyEvents, inputs.KeyEvent{Rune: r, Action: inputs.Press})
 	})
 	win.SetCursorPosCallback(func(_ *glfw.Window, xpos, ypos float64) {
+		// Accumulate relative motion for MouseDelta. In CursorDisabled mode GLFW
+		// reports virtual unbounded positions, so frame-to-frame delta is the true
+		// motion. lastCursorValid skips the jump on the first callback after a
+		// capture toggle.
+		if g.lastCursorValid {
+			g.mouseDPendingX += xpos - g.cursorX
+			g.mouseDPendingY += ypos - g.cursorY
+		}
 		g.cursorX, g.cursorY = xpos, ypos
+		g.lastCursorValid = true
 		g.mouseMove = append(g.mouseMove, inputs.MouseMoveEvent{X: xpos, Y: ypos})
 	})
 	win.SetMouseButtonCallback(func(_ *glfw.Window, button glfw.MouseButton, action glfw.Action, mods glfw.ModifierKey) {
@@ -133,4 +142,25 @@ func Window(c *app.Ctx) *glfw.Window {
 		return nil
 	}
 	return g.plat.window
+}
+
+// SetMouseCaptured locks (on=true) or releases (on=false) the mouse cursor for
+// FPS-style mouselook. While captured the cursor is hidden and confined, and
+// MouseDelta reports raw relative motion. No-op headless or before Build. The
+// portable counterpart lives in render3d_js.go for the browser.
+func SetMouseCaptured(c *app.Ctx, on bool) {
+	g := app.GetResource[GPU](c)
+	if g == nil || g.plat.window == nil {
+		return
+	}
+	if on {
+		g.plat.window.SetInputMode(glfw.CursorMode, glfw.CursorDisabled)
+		if glfw.RawMouseMotionSupported() {
+			g.plat.window.SetInputMode(glfw.RawMouseMotion, glfw.True)
+		}
+	} else {
+		g.plat.window.SetInputMode(glfw.CursorMode, glfw.CursorNormal)
+	}
+	// Avoid a delta spike from the cursor warp on the next callback.
+	g.lastCursorValid = false
 }

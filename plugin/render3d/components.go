@@ -116,6 +116,11 @@ func (t Transform3D) matrix() m.Mat4 {
 // root.
 type Parent struct{ Entity ecs.Entity }
 
+// ModelTree tags every entity NewModel creates for one model instance with its
+// synthetic root, so the whole instance can be removed together with
+// DespawnModelTree. (SpawnModel, the queued variant, does not tag.)
+type ModelTree struct{ Root ecs.Entity }
+
 // GlobalTransform holds the world-space matrix computed each frame from an
 // entity's Transform3D and its parent chain. The renderer reads it; gameplay
 // and overlay systems may read it too (e.g. for a light's world position).

@@ -7,6 +7,7 @@ import (
 	"runtime"
 
 	"github.com/hvuhsg/spliti/app"
+	"github.com/hvuhsg/spliti/plugin/audio"
 	"github.com/hvuhsg/spliti/plugin/inputs/actions"
 	"github.com/hvuhsg/spliti/plugin/render3d"
 	"github.com/hvuhsg/spliti/plugin/render3d/m"
@@ -15,6 +16,7 @@ import (
 
 	"hexisland/game"
 	"hexisland/game/scenes"
+	"hexisland/game/systems"
 )
 
 func init() { runtime.LockOSThread() }
@@ -32,12 +34,14 @@ func main() {
 			VSync:      true,
 		},
 		actions.Plugin{Map: game.BuildActions()},
+		audio.Plugin{},
 	)
 	game.RegisterSystems(a)
 	a.AddSystems(schedule.Startup, app.Chain(
 		app.System(game.LoadAssets),
+		app.System(systems.LoadSounds),
 		app.System(scenes.Main),
 	))
-	addCapture(a) // optional headless screenshot driver (SPLITI_HEX_SHOT); inert otherwise
+	addCapture(a) // optional screenshot driver (SPLITI_FPS_SHOT); inert otherwise
 	a.Run()
 }

@@ -14,7 +14,9 @@ import (
 //spliti:scene Main
 func Main(c *app.Ctx) {
 	_ = scene.Spawn(c, "sun", entities.SpawnSun(c, render3d.XForm().EulerDeg(-55, 35, 0)))
-	// Build the empty hex board: one glowing marker per cell. Tiles themselves
-	// are spawned at play time as the player collapses cells.
-	systems.SpawnBoard(c)
+	// Auto-generate the whole island and drop the player onto it. The
+	// containment dome is raised once the ground-height map is sampled (so its
+	// rays don't strike the dome) — see systems.EnsureHeights.
+	systems.GenerateWorld(c)
+	systems.SpawnPlayer(c)
 }

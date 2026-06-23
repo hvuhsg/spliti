@@ -2,6 +2,12 @@ package app
 
 import "reflect"
 
+// EditorMode is a marker resource the editor inserts when it hosts a game in
+// play mode. Game code can detect it (GetResource[EditorMode](c) != nil) to
+// disable behavior that must not run inside the editor, such as capturing the
+// mouse cursor for FPS mouselook. It is absent in a standalone run.
+type EditorMode struct{}
+
 // InsertResource stores a singleton value of type T on the App. Resources are
 // keyed by reflect.Type — one per type. Re-inserting overwrites.
 func InsertResource[T any](a *App, v *T) {

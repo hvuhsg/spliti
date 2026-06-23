@@ -132,6 +132,10 @@ func installDOMInput(g *GPU, canvas js.Value) {
 
 	add(canvas, "mousemove", func(e js.Value) {
 		x, y := e.Get("offsetX").Float(), e.Get("offsetY").Float()
+		// movementX/Y is the raw relative delta, valid (and the only meaningful
+		// motion) under pointer lock — feed it to MouseDelta for mouselook.
+		g.mouseDPendingX += e.Get("movementX").Float()
+		g.mouseDPendingY += e.Get("movementY").Float()
 		g.cursorX, g.cursorY = x, y
 		g.mouseMove = append(g.mouseMove, inputs.MouseMoveEvent{X: x, Y: y})
 	})
@@ -197,6 +201,23 @@ func (g *GPU) windowSize() (int, int) {
 		return 0, 0
 	}
 	return g.plat.canvas.Get("clientWidth").Int(), g.plat.canvas.Get("clientHeight").Int()
+}
+
+// SetMouseCaptured requests (on=true) or exits (on=false) browser pointer lock
+// on the canvas, for FPS-style mouselook; while locked MouseDelta reports the
+// raw movementX/Y. No-op headless or before Build. Browsers require the lock to
+// be requested from a user-gesture handler (call on a click), and the user can
+// always release with Esc. The native counterpart lives in render3d_native.go.
+func SetMouseCaptured(c *app.Ctx, on bool) {
+	g := app.GetResource[GPU](c)
+	if g == nil || !g.plat.canvas.Truthy() {
+		return
+	}
+	if on {
+		g.plat.canvas.Call("requestPointerLock")
+	} else {
+		js.Global().Get("document").Call("exitPointerLock")
+	}
 }
 
 // platformShutdown releases the DOM callbacks. The canvas and WebGPU context are

@@ -193,6 +193,16 @@ type GPU struct {
 
 	cursorX, cursorY float64
 
+	// Relative mouse motion (for FPS mouselook). Platform callbacks accumulate
+	// into mouseDPending* (native: frame-to-frame cursor delta, valid in GLFW
+	// CursorDisabled mode; js: the DOM movementX/Y under pointer lock).
+	// drainEvents snapshots into mouseD* once per frame so MouseDelta reports just
+	// this frame's movement. lastCursorValid suppresses the spurious jump on the
+	// first callback after toggling capture.
+	mouseDPendingX, mouseDPendingY float64
+	mouseDX, mouseDY               float64
+	lastCursorValid                bool
+
 	// Scroll-wheel deltas. Platform callbacks accumulate into scrollPending*;
 	// drainEvents snapshots that into scroll* once per frame (and zeroes the
 	// pending) so ScrollDelta reports just this frame's movement.
@@ -542,4 +552,16 @@ func ScrollDelta(c *app.Ctx) (x, y float64) {
 		return 0, 0
 	}
 	return g.scrollX, g.scrollY
+}
+
+// MouseDelta returns the relative mouse movement (in pixels) accumulated this
+// frame as (dx, dy), reset every frame. It is meaningful for mouselook only
+// while the cursor is captured via SetMouseCaptured; otherwise it tracks plain
+// cursor motion. Poll it from an Update system. Returns 0,0 headless.
+func MouseDelta(c *app.Ctx) (dx, dy float64) {
+	g := app.GetResource[GPU](c)
+	if g == nil {
+		return 0, 0
+	}
+	return g.mouseDX, g.mouseDY
 }

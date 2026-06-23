@@ -1,0 +1,2 @@
+Fox.glb — Khronos glTF Sample Models, model by PixelMannen, rig/animation by tomkranis.
+Licensed CC0 1.0 (public domain). Source: github.com/KhronosGroup/glTF-Sample-Models

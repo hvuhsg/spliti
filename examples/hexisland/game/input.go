@@ -13,6 +13,8 @@ import (
 func BuildActions() *actions.Map {
 	m := actions.NewMap()
 	m.Bind("jump", actions.Key(inputs.KeySpace), actions.Pad(inputs.GamepadA))
+	m.Bind("sprint", actions.Key(inputs.KeyLeftShift), actions.Pad(inputs.GamepadLeftBumper))
+	m.Bind("fire", actions.Mouse(inputs.MouseButtonLeft), actions.Pad(inputs.GamepadRightBumper))
 	m.BindAxis("move-x",
 		actions.ButtonAxis(actions.Key(inputs.KeyA), actions.Key(inputs.KeyD)),
 		actions.PadAxis(inputs.AxisLeftX))
