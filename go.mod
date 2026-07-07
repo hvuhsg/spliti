@@ -17,7 +17,7 @@ require (
 	github.com/jfreymuth/oggvorbis v1.0.5
 	github.com/mlange-42/arche v0.15.3
 	github.com/qmuntal/gltf v0.28.0
-	golang.org/x/image v0.34.0
+	golang.org/x/image v0.41.0
 )
 
 require (
@@ -30,6 +30,6 @@ require (
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/term v0.37.0 // indirect
-	golang.org/x/text v0.32.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/tools v0.46.0 // indirect
 )
